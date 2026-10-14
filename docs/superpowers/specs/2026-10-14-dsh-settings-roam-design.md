@@ -92,6 +92,23 @@
 
 `describe()` 静默少给的场景恰好会在交叉比对中暴露——因为文件里有那一行，而 `describe()` 没给出对应值。**校验通道正好补上主通道的盲区**，所以两条通道互为校验，而不是简单的「A 失败换 B」。
 
+#### 取哪个值：取「持久值」而不是「运行时值」
+
+`ctx.settings.describe()` 的返回里，每个配置项可能同时带 `base` 与 `value` 两个字段。它们不是重复的：
+
+| 字段 | 含义 |
+|---|---|
+| `base` | 写在 `cordis.patch.yml` 里的那个值，持久化到磁盘 |
+| `value` | 本进程当前实际生效的值，可能来自环境变量插值、`!!js` 表达式求值，或运行时动态调整 |
+
+**推送时一律取 `base`。** 理由：
+
+1. **`value` 会把运行时的东西固化进快照。** 如果某个字段在 `cordis.patch.yml` 里写的是 `!!js` 表达式，`value` 存的是求值结果，推到新机器就变成了硬编码的字面量——表达式本身丢失了。
+2. **`value` 可能依赖当前环境。** 环境变量插值产生的值，在另一台机器上未必成立。
+3. **`base` 才是「用户配置的内容」。** 本插件同步的是配置意图，不是某次运行的状态；快照在语义上应与 `cordis.patch.yml` 一致，这也让交叉校验成为可能。
+
+> 反过来，`value` 并非无用：**读路径的交叉校验里，`base` 与文件内容比对；如果发现 `base` 与 `value` 不同，说明该项是运行时求值的，应在展示差异时提示用户**——因为这类项跨机搬运后行为可能与来源机器不一致。
+
 #### 写路径（拉取时）：先备份 + 写后回读校验
 
 ```
@@ -127,7 +144,41 @@
 
 官方包的完整清单（58 个）中，没有 sync / backup / export / snapshot 之类的包。本期功能需要自建。
 
-### 2.6 本机环境实测
+### 2.6 「官方」的判定口径
+
+归属表要求「DSH 自身与其官方插件进公共线，用户自行安装的第三方插件不进」。所以需要一个确定的判定口径。
+
+**`BundleInfo.official` 单独用是不够的。** 源码 `packages/boot/plugin-manager/src/index.ts:299` 的计算式是：
+
+```
+official = optional || offered !== undefined
+```
+
+- `optional`：名字在 `OPTIONAL_BUNDLES`（`packages/boot/app-boot/src/profile.ts:223`，11 个条目）
+- `offered`：名字在 `OFFICIAL_ON_DEMAND_CATALOG`（`packages/boot/app-boot/src/official-bundles.generated.ts`，只有 2 个条目）
+
+**它漏掉了随 DSH 安装本体发布的那批插件。** 源码 `index.ts:297` 单独算了一个 `shipped`（`Object.hasOwn(installation.dependencies ?? {}, name)`），但没有并入 `official`。所以官方随安装带的插件，这个字段可能是 `false`。
+
+**采用的判定口径为三条来源的并集**，任一命中即为官方：
+
+| 来源 | 判定方式 | 运行时可见性 |
+|---|---|---|
+| A. 随 DSH 安装发布 | 名字在 DSH 安装清单的 `dependencies` 里（源码的 `shipped`） | 经 `availability === 'installation'` 间接可得（`index.ts:323`） |
+| B. 官方可选包 | 名字在 `OPTIONAL_BUNDLES`（11 条） | 无直接字段，`official` 已含入 |
+| C. 官方按需包 | 名字在 `OFFICIAL_ON_DEMAND_CATALOG`（2 条） | 无直接字段，`official` 已含入 |
+
+**落地形式**：`official === true || availability === 'installation'`。
+
+**其中 A 的判定属于语义借用**：`availability` 的语义是「这个包从哪里来」（`'installation' | 'profile' | 'missing'`），不是「是不是官方」。第三方包从 profile 装、官方随安装带的包从 installation 来，按此推导 A 成立，但**必须在实现第一步用实测确认**：
+
+- 第三方插件（本机的 `dsh-soul`、`dsh-git-sentry` 等）应满足 `official === false` 且 `availability === 'profile'`
+- 官方随安装带的插件应满足 `availability === 'installation'`
+
+**不用「包名前缀 `@deepseek-ai/`」判定。** 前缀是 npm scope，不是所有权凭证。实践中它与官方判定**目前**等价（这个 scope 外人无法注册），但它会在两种情况下失效：官方发布非该前缀的首方包，或用户从别的 registry 安装了同名包。前缀只作文档与界面上的可读辅助，不作判定依据。
+
+**副产品**：`dsh.profile.bundles` 这个「已启用 bundle」名单是**动态的**——本机就有关闭的官方可选包（`dsh-experimental-ralph-bundle`、`dsh-experimental-cot-translation-bundle`）。所以插件名单不能当作固定快照，每次推送都必须重新读取。
+
+### 2.7 本机环境实测
 
 **机器专属项**（绝不能跨机搬运）：
 
@@ -255,7 +306,7 @@
 | 插件清单（**仅名称**） | 公共 | 名单需区分官方与第三方 |
 | provider 定义（名称、地址、模型名、`apiKeyEnv` 引用名） | 公共 | 引用名不是密钥 |
 | agent presets | 公共 | |
-| 技能（`~/.dsh/skills/`） | 公共 | |
+| 技能（`~/.dsh/skills/`） | 公共 | 含可执行脚本与二进制资源，见 §4.6 |
 | 主题偏好（`ui-theme` 的 `preference`） | **本机** | 各机各自配置 |
 | 工具权限预设（三档 `sandbox` + `approval`、`defaultPreset`） | **本机** | 各机各自配置 |
 | 默认模型（`agent-default-model` 的 `provider` / `model`） | **本机** | 各机各自配置 |
@@ -300,6 +351,50 @@
 ### 4.5 一个待定的衍生项
 
 DSH 原生自带 `@deepseek-ai/dsh-persona`（官方包，实现在 `packages/preset/persona`），其配置直接写在 `cordis.patch.yml` 的 `persona` 节里，天然属于公共线抽取范围。用户表示「后面再看看怎么通过官方插件来设定」，故本期不配置也不同步；机制上它随时可用。见 §7 开放项 5。
+
+### 4.6 抽取粒度：按条目，不是按文件
+
+**这是本设计的关键约束，实测数据支撑。**
+
+`cordis.patch.yml` 是本项目的核心同步对象，但它的内容**绝大部分是本机专属的**。实测取样中，该文件共 118 行、9 个顶层条目：
+
+| 顶层条目 | 归属 |
+|---|---|
+| `webserver` | 本机 |
+| `dsh-auth-gate` | 本机 |
+| `ui-settings-general` | 本机 |
+| `llm-pi-ai` | **公共** |
+| `agent-default-model` | 本机 |
+| `typert-gateway` | 本机 |
+| `ui-theme` | 本机 |
+| `permission` | 本机 |
+| `session-log-deepseek` | 本机 |
+
+**9 个条目里只有 1 个进公共线。** 所以：
+
+- 抽取的最小单位是**顶层条目**（`- id: <插件 id>` 这一项及其 `config:` 子树），不是整个文件。
+- 按文件整体同步会恰好犯下本项目要解决的那个错误——把 `webserver.host` 的局域网 IP 带到新机器上。
+- 实现时需要一个能按顶层条目切分 Loader YAML 的解析器（见 §9 第一个待验证项）。
+
+**条目内部也可能混着两类。** `llm-pi-ai` 整体判为公共，但它的 `providers.<名字>.baseURL` 指向的是外部服务端点——这仍然属于公共（它是服务地址，不是本机地址）。需要区分的是「外部服务端点」与「本机监听/对外地址」，二者形式相似、性质相反。
+
+### 4.7 技能不是纯文本：含脚本与二进制
+
+技能目录（`~/.dsh/skills/<名字>/`）并不只是 `SKILL.md`。实测 9 个技能合计约 **404 KB**，其中：
+
+| 内容类型 | 实例 |
+|---|---|
+| 可执行脚本 | `agent-browser` 的 `templates/*.sh`、`screenshot` 的 `scripts/*.py` / `*.ps1` / `*.swift`、`brainstorming` 的 `scripts/server.cjs` |
+| 二进制资源 | `screenshot` 的 `assets/screenshot.png` |
+| 认证与许可文件 | 多个技能含 `LICENSE.txt`、`agents/openai.yaml` |
+| 文档与模板 | `references/*.md`、`examples/*.md`、`scripts/frame-template.html` |
+
+**两个必须处理的点**：
+
+1. **保留文件模式。** 脚本靠可执行位工作。同步时若丢失权限位，脚本在目标机器上会静默失效——文件在，但跑不起来。
+2. **同步前必须能审查脚本内容。** 技能脚本会在目标机器上被执行。推送前应能在差异视图里看到脚本的新增与改动，而不是当作不透明二进制默默搬过去。
+
+第 2 点不是额外的安全设计——§3.5 的差异预览本来就要求展示将要同步的内容。这里只是明确**技能脚本必须纳入可读的差异展示**，不能因为「技能是整体目录」就跳过逐文件差异。
 
 ---
 
@@ -434,7 +529,7 @@ SkipReason
 
 | # | 开放项 | 什么时候定 |
 |---|---|---|
-| 1 | **官方 / 第三方的判定口径**。决策 19 要求公共线只含 DSH 自身与官方插件，但没有现成接口能直接回答「这个插件是不是官方的」。候选做法：`BundleInfo.official` 字段（最省，口径待核实）、硬编码 `@deepseek-ai/` 前缀白名单、调 `listBundles()` 与官方目录比对（最准）。第三方插件的 `insert` 痕迹也需在抽取时识别 | 实现前 |
+| 1 | 关闭 —— 已由 §2.6 定了判定口径：`official === true \|\| availability === 'installation'`，三条来源取并集。实现第一步需实测确认（第三方包应满足 `official === false` 且 `availability === 'profile'`） | 已定（口径已定，实测待做） |
 | 2 | 关闭 —— 已由决策 24–26 定了读、写、技能三条路径的做法 | 已定 |
 | 3 | 交叉校验不一致时的**裁决界面**形态（在侧边栏主面板里逐项选，还是弹窗统一裁决） | 第一期实现时 |
 | 4 | WebDAV 的历史版本策略（git 天然带历史，WebDAV 需自己按时间戳存快照） | 第二期 |
