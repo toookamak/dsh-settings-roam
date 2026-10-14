@@ -1,0 +1,18 @@
+node_modules/
+.pnpm-store/
+.yarn/
+dist/
+build/
+*.tsbuildinfo
+*.log
+npm-debug.log*
+pnpm-debug.log*
+.env*
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# LibreOffice / 编辑器锁文件
+.~lock.*#
+*.tmp
