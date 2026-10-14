@@ -171,7 +171,7 @@ official = optional || offered !== undefined
 
 **其中 A 的判定属于语义借用**：`availability` 的语义是「这个包从哪里来」（`'installation' | 'profile' | 'missing'`），不是「是不是官方」。第三方包从 profile 装、官方随安装带的包从 installation 来，按此推导 A 成立，但**必须在实现第一步用实测确认**：
 
-- 第三方插件（本机的 `dsh-soul`、`dsh-git-sentry` 等）应满足 `official === false` 且 `availability === 'profile'`
+- 第三方插件（取样机器上的人设插件、GitHub 直装插件等）应满足 `official === false` 且 `availability === 'profile'`
 - 官方随安装带的插件应满足 `availability === 'installation'`
 
 **不用「包名前缀 `@deepseek-ai/`」判定。** 前缀是 npm scope，不是所有权凭证。实践中它与官方判定**目前**等价（这个 scope 外人无法注册），但它会在两种情况下失效：官方发布非该前缀的首方包，或用户从别的 registry 安装了同名包。前缀只作文档与界面上的可读辅助，不作判定依据。
@@ -195,32 +195,28 @@ official = optional || offered !== undefined
 
 ```
 ~/.dsh/
-  skills/                    ← 7 个技能
-  skills-manager/            ← repositories.json (608 KB), repository-cache/ 等
-  storages/                  ← dsh_auth_sessions.json, session_projcache/, workspace.json
+  skills/                    ← 各技能目录，含 SKILL.md 与可能的脚本/资源
+  skills-manager/            ← repositories.json、repository-cache/ 等
+  storages/                  ← 认证会话、项目缓存、工作区记录
   auth/users.yaml
   .credentials.yaml          ← 真密钥，永不进快照
-  profiles/web/
+  profiles/<名字>/
     cordis.patch.yml         ← 核心配置（公共与本机混合，需拆分）
     package.json             ← dependencies + dsh.profile.bundles
     pnpm-lock.yaml
     node_modules/            ← 不进快照
 ```
 
-**插件名单**（profile `package.json` 的 `dsh.profile.bundles`，15 项）：
+**插件名单**（profile `package.json` 的 `dsh.profile.bundles`）：
 
 ```
-官方：@deepseek-ai/dsh-base
-      @deepseek-ai/dsh-web-app
-      @deepseek-ai/dsh-experimental-agent-team-profile
-      @deepseek-ai/dsh-experimental-inspector-profile
-      @deepseek-ai/dsh-experimental-cot-translation-bundle
-      @deepseek-ai/dsh-experimental-ralph-bundle
+官方：DSH 基础包、Web 应用包，以及若干 `@deepseek-ai/dsh-experimental-*` 可选包
 
-第三方：dsh-auth-gate、dshmarket、dsh-better-sidebar、dsh-context、billion-context、
-        dsh-soul、@michengai/dsh-agency-agents、@michengai/dsh-skills-manager、
-        @changfenhuang/dsh-genui
+第三方：认证网关、插件市场、侧边栏、上下文管理、人设、专家团、
+        技能管理、GenUI 等，来源既有 npm 也有 GitHub
 ```
+
+> 此处只说明名单的**构成方式与分类**，不逐一列举取样机器上的实际条目。本仓库是公开的插件仓库，不承载某台机器的具体配置。
 
 **注**：`dsh.profile.bundles` 是「哪些包作为 bundle 挂载」的声明，与「装了哪些依赖」（`dependencies`）是两件事。快照需要前者加后者。
 
@@ -315,7 +311,7 @@ official = optional || offered !== undefined
 | `webserver.host` | **本机** | 各机监听地址不同 |
 | `dsh-auth-gate` 的 `publicHost`、`mode`、`cookieSecure` | **本机** | |
 | 工作区绝对路径（`storages/workspace.json`） | **本机** | |
-| 第三方插件的内容（`soul-config.json` 全部键，以及 `dshmarket`、`dsh-better-sidebar`、`dsh-context`、`billion-context`、`@changfenhuang/dsh-genui`、`@michengai/*`、`dsh-git-sentry` 的配置） | 不同步 | 插件内容归插件 |
+| 第三方插件的内容（各插件自己的配置文件与键，如人设插件独立成文的配置，以及插件市场、侧边栏、上下文管理、GenUI、专家团、技能管理器等各自的配置） | 不同步 | 插件内容归插件 |
 | 第三方插件在 `cordis.patch.yml` 中留下的安装痕迹（`insert` 行等） | 不同步 | 抽取时必须识别并排除 |
 | `.credentials.yaml` | 不同步 | 真密钥 |
 | `auth/users.yaml` | 不同步 | 账号数据 |
@@ -329,16 +325,16 @@ official = optional || offered !== undefined
 
 | 项 | 在 patch 里的形态 | 去掉之后 |
 |---|---|---|
-| 主题偏好 | `ui-theme` 节的 `preference: dark` | 新机器回到默认浅色，需手动切一次 |
-| 工具权限预设 | `permission` 节的三档 `sandbox` + `approval` 组合，以及 `defaultPreset: danger-full-access` | 回落到默认 `ask` 档，工具调用会弹批准框；本机的 `danger-full-access` + `approval: never` 状态消失，需手动选回 |
-| 默认模型 | `agent-default-model` 节的 `provider: muyuan`、`model: deepseek-v4.1-flash` | **默认模型为空**，新会话不会自动选中，需手动选一次 |
-| 心跳参数 | `typert-gateway` 的 `websocketHeartbeatIntervalMs: 15000` | 回到默认 2000 毫秒；经远程链路使用时可能重新出现连接偶发中断 |
+| 主题偏好 | `ui-theme` 节的 `preference` 字段 | 新机器回到默认外观，需手动切换一次 |
+| 工具权限预设 | `permission` 节的三档 `sandbox` + `approval` 组合，以及 `defaultPreset` 字段 | 回落到默认档位，工具调用会弹批准框；本机放宽过的审批状态消失，需手动选回 |
+| 默认模型 | `agent-default-model` 节的 `provider`、`model` 两个字段 | **默认模型为空**，新会话不会自动选中，需手动选一次 |
+| 心跳参数 | `typert-gateway` 的 `websocketHeartbeatIntervalMs` 字段 | 回到默认值；经远程链路使用时可能重新出现连接偶发中断 |
 
 **一处容易误读的地方**：provider 定义本身**仍在公共线里**。所以拉取后模型的**可选项是齐全的**（用户定义过的 provider 都在），丢的只是「默认选哪一个」。
 
 ### 4.4 判为「不同步」的第三方插件内容：包含什么、去掉会怎样
 
-**包含什么**：用户后来自己安装的第三方插件所拥有的全部配置——人设插件 `dsh-soul` 的 `~/.dsh/soul-config.json` 全部 13 个键（昵称、职业、简介、风格、标题列表、表情、表格、回复长度、语言、自定义指令、人设总开关、变更需确认、拖尾动画四项），以及 `dshmarket`、`dsh-better-sidebar`、`dsh-context`、`billion-context`、`@changfenhuang/dsh-genui`、`@michengai/*`、`dsh-git-sentry` 各自的配置。
+**包含什么**：用户后来自己安装的第三方插件所拥有的全部配置。代表性的一类是**人设插件**——它的配置独立成文，与 DSH 自身的 `cordis.patch.yml` 分开存放，含昵称、职业、简介、回复风格、标题与列表、表情、表格、回复长度、语言、自定义指令，以及人设总开关、变更需确认与拖尾动画相关项。其余如插件市场、侧边栏、上下文管理、外部连接监听、GenUI、专家团、技能管理器等，各自拥有自己的配置。
 
 **去掉之后**：
 
@@ -356,7 +352,7 @@ DSH 原生自带 `@deepseek-ai/dsh-persona`（官方包，实现在 `packages/pr
 
 **这是本设计的关键约束，实测数据支撑。**
 
-`cordis.patch.yml` 是本项目的核心同步对象，但它的内容**绝大部分是本机专属的**。实测取样中，该文件共 118 行、9 个顶层条目：
+`cordis.patch.yml` 是本项目的核心同步对象，但它的内容**绝大部分是本机专属的**。实测取样中，该文件有 9 个顶层条目：
 
 | 顶层条目 | 归属 |
 |---|---|
@@ -546,7 +542,7 @@ SkipReason
 | 插件版本漂移 | 只记名字不记版本，不同时间恢复结果不同 | 用户可在 `notes.md` 中钉版本；`pnpm-lock.yaml` 提供对照参照 |
 | 恢复后 DSH 无法启动 | 配置是 DSH 的启动依赖，写错会导致起不来 | 走官方编辑路径（自带原子写与加锁）；应用前必备份；回退路径在报告里明确给出 |
 | 多台机器 DSH 版本不一致 | 官方安装流程的兼容检查会拒绝安装 | 这是保护而非故障；在报告中明确指出需要什么版本 |
-| 快照体积 | `repositories.json` 单文件 608 KB | 第一期把 `skills-manager/` 整体排除 |
+| 快照体积 | 技能管理器的仓库索引为单体大文件 | 第一期把 `skills-manager/` 整体排除 |
 | 官方 / 第三方界线识别 | 归属表要求区分两者，但现有接口没有一个是非题 | 见 §7.2 开放项 1 |
 | 静默漏抽 / 静默写失败 | 官方服务（`ctx.settings`、`ctx.skills`）的失效形态是少给数据或不写入，**均不抛错** | 读路径用双通道交叉校验，不一致时停下由用户裁决；写路径用写后回读校验，不符则回退并在报告里列为需人工处理。见 §2.3 |
 | 第三方插件在 patch 里留下 `insert` 行 | 抽取时若误把 `insert` 行当作配置项，会写坏别的机器的加载顺序 | 抽取时识别并排除；用交叉校验对比文件原始行，排除项也要能对上 |
