@@ -14,7 +14,13 @@ import { createSyncService } from './src/service.js'
 
 export const name = 'settings-roam'
 
-/** 读路径依赖 settings（describe）与 skills（crossCheck），缺失就不该启动。 */
+/**
+ * 读路径依赖 settings（describe）与 skills（交叉校验），缺失就不该启动。
+ *
+ * pluginManager 不在 inject 里：插件名单属于「有则收集、没有也能用」的能力。
+ * 把它加进 inject 会让插件在缺少该服务的环境下直接不启动，
+ * 而它缺了只是少一份名单，不该阻断同步。
+ */
 export const inject = ['settings', 'skills']
 
 /**
@@ -46,6 +52,10 @@ export function apply(ctx, config) {
     // 校验通道：直读文件是主通道，ctx.skills 是交叉校验通道。
     // 不传它读路径就退化成单通道——最坏情况是静默同步错内容而不是报警。
     skillService: ctx.skills,
+    // 插件名单采集口。用 getter 而不是直接传 ctx.pluginManager：
+    // 该服务可能比本插件晚就绪，装配那一刻取到的是 undefined。
+    // 惰性取值保证「推送时」拿到的是当时的真实服务。
+    pluginManager: () => ctx.pluginManager,
     backend: () => createGitBackend({
       repoUrl: config?.repoUrl,
       workDir: join(dshRoot, 'settings-roam', 'work'),

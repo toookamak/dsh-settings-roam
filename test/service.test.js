@@ -321,3 +321,102 @@ test('preparePull 同样只读地跑校验', async () => {
   assert.equal(plan.skillCheck.complete, true)
   rmSync(root, { recursive: true })
 })
+
+// ─── 插件名单接线（缺口 D）────────────────────────────────────────
+// 背景：collectBundles 与 crossCheckSkills 是同一类缺陷——实现了、有测试、
+// 零调用点。第一期的「插件只记名字」在运行时因此是空的。
+
+test('未显式传 bundles 时，自己从 pluginManager 采集', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  let called = 0
+  const service = createSyncService({
+    backend: fakeBackend(),
+    workDir,
+    dshRoot,
+    skillsRoot,
+    pluginManager: () => ({
+      async listBundles() {
+        called += 1
+        return [
+          { name: '@deepseek-ai/dsh-foo', official: true, availability: 'installation' },
+          { name: 'someone-bar', official: false, availability: 'profile' },
+        ]
+      },
+    }),
+  })
+
+  const plan = await service.preparePush({ generatedBy: 'test' })
+
+  const bundlesFile = plan.files.find(f => f.path === 'config/bundles.json')
+  assert.ok(bundlesFile, '采集成功后应产出名单文件')
+  const parsed = JSON.parse(bundlesFile.content)
+  assert.deepEqual(parsed.official, ['@deepseek-ai/dsh-foo'])
+  assert.deepEqual(parsed.thirdParty, ['someone-bar'])
+  assert.equal(called >= 1, true, '采集口应被调用')
+  rmSync(root, { recursive: true })
+})
+
+test('拿不到 pluginManager 时不写名单文件 —— 区分「没有名单」与「名单是空的」', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({ backend: fakeBackend(), workDir, dshRoot, skillsRoot })
+
+  const plan = await service.preparePush({ generatedBy: 'test' })
+  assert.equal(
+    plan.files.find(f => f.path === 'config/bundles.json'),
+    undefined,
+    '空名单会覆盖云端真实名单，因此宁可不写',
+  )
+  rmSync(root, { recursive: true })
+})
+
+test('pluginManager 尚未就绪（返回 undefined）时不写名单文件', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({
+    backend: fakeBackend(),
+    workDir,
+    dshRoot,
+    skillsRoot,
+    pluginManager: () => undefined,
+  })
+
+  const plan = await service.preparePush({ generatedBy: 'test' })
+  assert.equal(plan.files.find(f => f.path === 'config/bundles.json'), undefined)
+  rmSync(root, { recursive: true })
+})
+
+test('采集抛错不拖垮推送', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({
+    backend: fakeBackend(),
+    workDir,
+    dshRoot,
+    skillsRoot,
+    pluginManager: () => ({ async listBundles() { throw new Error('还没就绪') } }),
+  })
+
+  const plan = await service.preparePush({ generatedBy: 'test' })
+  assert.ok(plan.files.length > 0, '采集失败不该让推送准备整体失败')
+  assert.equal(plan.files.find(f => f.path === 'config/bundles.json'), undefined)
+  rmSync(root, { recursive: true })
+})
+
+test('调用方显式传入的 bundles 优先于采集结果', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({
+    backend: fakeBackend(),
+    workDir,
+    dshRoot,
+    skillsRoot,
+    pluginManager: () => ({
+      async listBundles() { return [{ name: 'collected', official: true, availability: 'installation' }] },
+    }),
+  })
+
+  const plan = await service.preparePush({
+    generatedBy: 'test',
+    bundles: { official: ['explicit'], thirdParty: [] },
+  })
+  const parsed = JSON.parse(plan.files.find(f => f.path === 'config/bundles.json').content)
+  assert.deepEqual(parsed.official, ['explicit'], '显式传入应覆盖采集')
+  rmSync(root, { recursive: true })
+})

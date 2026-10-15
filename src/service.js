@@ -21,6 +21,7 @@ import { buildSnapshot, serializeSnapshot } from './snapshot.js'
 import { diffSnapshots, summarizeDiff } from './diff.js'
 import { applyPatchFile, verifyWriteBack } from './apply.js'
 import { scanSkills, listSkillNames, crossCheckSkills } from './skills.js'
+import { collectBundles } from './bundles.js'
 import { assertBackend } from './backends/index.js'
 
 /** 云端布局，见设计 §5.1。 */
@@ -86,6 +87,12 @@ export function createSyncService(config) {
    */
   const skillService = config.skillService ?? null
 
+  /**
+   * 插件名单来源。传函数而不是实例：该服务可能比本插件晚就绪。
+   * 取不到时返回 null，由调用方决定退化成什么行为。
+   */
+  const pluginManagerSource = config.pluginManager ?? null
+
   /** 已建好的后端实例，惰性缓存，避免重复建。 */
   let resolved = null
 
@@ -144,6 +151,34 @@ export function createSyncService(config) {
       }
     }
     return out
+  }
+
+  /**
+   * 采集本机插件名单。
+   *
+   * 设计决策 8：只记名字。名单是动态的（本机就有先后关闭的可选包），
+   * 所以每次都重新读，不当固定快照。
+   *
+   * 取不到 pluginManager 时返回 null 而不是空名单——空名单会被
+   * 当成「这台机器一个插件都没装」，写进云端后覆盖掉真实名单。
+   * 两个「没有」必须区分：没有名单 vs 名单是空的。
+   *
+   * @returns {Promise<{official: string[], thirdParty: string[]}|null>}
+   */
+  async function collectPluginNames() {
+    if (pluginManagerSource === null) return null
+    const manager = typeof pluginManagerSource === 'function'
+      ? pluginManagerSource()
+      : pluginManagerSource
+    if (manager === null || manager === undefined) return null
+
+    try {
+      const { official, thirdParty } = await collectBundles(manager)
+      return { official, thirdParty }
+    } catch {
+      // 采集失败也只是少一份名单，不该让推送整体失败。
+      return null
+    }
   }
 
   /**
@@ -207,10 +242,16 @@ export function createSyncService(config) {
 
       // 双通道校验：直读是主通道，服务视图是校验通道。只读，不影响写入。
       const skillCheck = await crossCheck()
-      if (input.bundles !== undefined) {
+
+      // 插件名单：调用方显式传入优先；否则自己从 pluginManager 采集。
+      // 两者都拿不到时不写这个文件——空名单会覆盖掉云端真实名单。
+      const bundles = input.bundles !== undefined
+        ? input.bundles
+        : await collectPluginNames()
+      if (bundles !== null && bundles !== undefined) {
         files.push({
           path: CLOUD_PATHS.bundles,
-          content: JSON.stringify(input.bundles, null, 2) + '\n',
+          content: JSON.stringify(bundles, null, 2) + '\n',
         })
       }
 
