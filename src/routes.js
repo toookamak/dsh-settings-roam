@@ -36,6 +36,7 @@ export const ROUTE_PREFIX = '/api/settings-roam'
  */
 export const ROUTES = {
   status: `${ROUTE_PREFIX}.status`,
+  export: `${ROUTE_PREFIX}.export`,
   push: `${ROUTE_PREFIX}.push`,
   pull: `${ROUTE_PREFIX}.pull`,
 }
@@ -176,6 +177,39 @@ export function createRouteHandlers(deps) {
   }
 
   /**
+   * 本地导出：把「要备份的东西」真实落成文件，不碰云端。
+   *
+   * 为什么单独给一个动作，而不是让用户去点「推送」再看导出目录：
+   *   1. 第一阶段的目标是「能获取到需要的配置」。这件事不需要云端仓库，
+   *      把它藏在「推送」按钮背后，用户就得先有一个远端仓库才能取到自己的配置——
+   *      顺序反了。
+   *   2. 推送是两段式（预览→确认），而导出是一次性、无副作用的本地动作
+   *      （只往导出目录写，不动本机配置、不动远端）。套上确认流程只会让
+   *      「我就想看看要备份什么」这件事多两次点击。
+   *
+   * 注意它用的是 preparePush 而不是另写一条路径：导出与推送必须给出同一份内容，
+   * 否则用户在导出目录里核对过的，和真正推上去的不是一回事。
+   *
+   * @param {Request} request
+   */
+  const exportLocal = async (request) => {
+    const body = await readBody(request)
+    const plan = await service.preparePush({
+      generatedBy: body.generatedBy ?? 'dsh-settings-roam',
+      exportRoot: body.exportRoot ?? service.defaultExportRoot(),
+      bundles: body.bundles,
+    })
+    return jsonResponse({
+      ok: true,
+      overview: buildPushOverview(plan),
+      exported: plan.exported,
+      comparedWithRemote: plan.comparedWithRemote,
+      // 只回路径名：内容可能很大，而界面只给概述。
+      files: plan.files.map(f => f.path),
+    })
+  }
+
+  /**
    * 推送：prepare 算差异与导出，confirm 才真正写云端。
    * @param {Request} request
    */
@@ -260,6 +294,10 @@ export function createRouteHandlers(deps) {
       // （packages/client/connection/src/rpc.ts:152）。直接回对象会让
       // Connection 层拿到一个它读不懂的东西。
       if (path === ROUTES.status) return jsonResponse(await status())
+      if (path === ROUTES.export) {
+        if (request.method !== 'POST') return jsonResponse({ ok: false, error: '导出需要 POST' }, 405)
+        return await exportLocal(request)
+      }
       if (path === ROUTES.push) {
         if (request.method !== 'POST') return jsonResponse({ ok: false, error: '推送需要 POST' }, 405)
         return await push(request)
@@ -275,7 +313,7 @@ export function createRouteHandlers(deps) {
     }
   }
 
-  return { fetch, status, push, pull }
+  return { fetch, status, exportLocal, push, pull }
 }
 
 /**
@@ -288,6 +326,7 @@ export function describeRoutes(deps) {
   const handlers = createRouteHandlers(deps)
   return [
     { path: ROUTES.status, methods: ['GET'], requestBody: 'buffered', fetch: handlers.fetch },
+    { path: ROUTES.export, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
     { path: ROUTES.push, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
     { path: ROUTES.pull, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
   ]

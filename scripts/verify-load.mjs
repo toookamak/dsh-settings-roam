@@ -16,7 +16,7 @@
  * 退出码 0 表示验收通过；非 0 且打印 "entry did not activate" 表示插件未激活。
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -113,7 +113,10 @@ function bootAndCapture(waitMs = 45_000, required = [], probe = null) {
 }
 
 /** 请求探针带出来的结果，供第 8 步断言。 */
-let routeProbe = { attempted: false, error: null, status: null, body: null }
+let routeProbe = {
+  attempted: false, error: null, status: null, body: null,
+  exportStatus: null, exportBody: null,
+}
 let probeError = null
 
 function cleanup() {
@@ -270,6 +273,16 @@ try {
     const res = await fetch(`${base.origin}/api/settings-roam.status`, { headers })
     routeProbe.status = res.status
     routeProbe.body = await res.json().catch(() => null)
+
+    // 光「读得到」还不够。用户要的是「实际文件确实落得出来」，
+    // 所以再真调一次导出，然后去磁盘上看那份文件在不在。
+    const exp = await fetch(`${base.origin}/api/settings-roam.export`, {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: '{}',
+    })
+    routeProbe.exportStatus = exp.status
+    routeProbe.exportBody = await exp.json().catch(() => null)
   })
 
   if (/did not activate/.test(output)) {
@@ -367,6 +380,33 @@ try {
         + `本机专属 ${b.machineCount} 项、技能 ${b.skillCount} 个`)
       console.log(`  profile=${b.profile.name} 已配置云端=${b.configured}`
         + ` patch 文件已读到=${b.patchExists}`)
+    }
+  }
+
+  // 9. 导出真落盘了吗。
+  //    「页面上要有概述」与「实际文件要确实落出来」是两件事：
+  //    前者只看响应体就能骗过，后者必须去磁盘上点一下。
+  if (routeProbe.exportStatus !== 200 || routeProbe.exportBody?.ok !== true) {
+    console.error(`✗ 导出路由失败：HTTP ${routeProbe.exportStatus} `
+      + `${JSON.stringify(routeProbe.exportBody)}`)
+    failed = true
+  } else {
+    const where = routeProbe.exportBody.exported?.exportPath ?? null
+    if (where === null) {
+      console.error('✗ 导出没有回报落盘位置，用户无从去核对')
+      failed = true
+    } else if (!existsSync(where)) {
+      console.error(`✗ 导出回报了位置但目录不存在：${where}`)
+      failed = true
+    } else if (!existsSync(join(where, 'manifest.json'))) {
+      console.error(`✗ 导出目录里没有清单文件：${where}`)
+      console.error(`  实际内容：${readdirSync(where).join('、')}`)
+      failed = true
+    } else {
+      const names = readdirSync(where)
+      console.log(`✓ 导出真实落盘：${names.length} 项，含清单文件`)
+      console.log(`  位置 ${where}`)
+      console.log(`  内容 ${names.join('、')}`)
     }
   }
 

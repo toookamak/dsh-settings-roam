@@ -264,12 +264,16 @@ test('内部异常回一句可显示的话，不带堆栈与绝对路径', async
   assert.ok(!/\bat\s+\w+.*:\d+:\d+/.test(body.error), '不得把堆栈回给界面')
 })
 
-test('describeRoutes 给出三条路由，方法与路径齐全', () => {
+test('describeRoutes 给出四条路由，方法与路径齐全', () => {
   const routes = describeRoutes(deps())
-  assert.deepEqual(routes.map(r => r.path), [ROUTES.status, ROUTES.push, ROUTES.pull])
+  assert.deepEqual(
+    routes.map(r => r.path),
+    [ROUTES.status, ROUTES.export, ROUTES.push, ROUTES.pull],
+  )
   assert.deepEqual(routes[0].methods, ['GET'])
   assert.deepEqual(routes[1].methods, ['POST'])
   assert.deepEqual(routes[2].methods, ['POST'])
+  assert.deepEqual(routes[3].methods, ['POST'])
   for (const r of routes) {
     assert.equal(typeof r.fetch, 'function')
     assert.equal(r.requestBody, 'buffered')
@@ -299,4 +303,79 @@ test('浏览器半侧用的路径与宿主注册的路径逐字一致', () => {
   for (const path of Object.values(ROUTES)) {
     assert.ok(src.includes(`'${path}'`), `client.js 里必须出现 ${path}`)
   }
+})
+
+// ─── 本地导出（第一阶段：不联网也要能把配置取出来）────────────────
+
+test('导出不需要云端仓库 —— 第一阶段的目标不依赖远端', async () => {
+  const d = deps({ isConfigured: () => false })
+  const handlers = createRouteHandlers(d)
+
+  const res = await handlers.fetch(post(ROUTES.export, {}))
+  const body = await res.json()
+
+  assert.equal(res.status, 200)
+  assert.equal(body.ok, true)
+  assert.ok(body.overview, '要给概述：页面上要显示同步了什么')
+  assert.equal(d.calls.preparePush, 1)
+  assert.equal(d.calls.confirmPush, 0, '导出绝不能写云端')
+  assert.equal(d.calls.applyPull, 0, '导出绝不能改本机配置')
+})
+
+test('导出不要求 token —— 它无副作用，不必让用户多点两次', async () => {
+  const d = deps()
+  const handlers = createRouteHandlers(d)
+
+  // 未经任何预览直接导出
+  const res = await handlers.fetch(post(ROUTES.export, {}))
+  assert.equal(res.status, 200)
+  assert.equal(d.calls.preparePush, 1)
+})
+
+test('导出与推送算出的是同一份内容 —— 核对过的和推上去的必须一致', async () => {
+  const d = deps()
+  const handlers = createRouteHandlers(d)
+
+  const exported = await (await handlers.fetch(post(ROUTES.export, {}))).json()
+  const prepared = await (await handlers.fetch(post(ROUTES.push, { step: 'prepare' }))).json()
+
+  assert.deepEqual(exported.files, prepared.files, '两条路径的文件清单必须逐项相同')
+  assert.equal(d.calls.preparePush, 2, '两者都走 preparePush，不另起一条易漂移的路径')
+})
+
+test('导出回的是落盘位置 —— 用户据此去打开核对', async () => {
+  const d = deps({
+    preparePush: async () => ({
+      files: [{ path: 'config/profile.patch.yml', content: 'x' }],
+      summary: { add: 1, modify: 0, delete: 0 },
+      comparedWithRemote: false,
+      exported: { exportPath: '/home/u/.dsh/settings-roam/export/2026-10-15-1500' },
+      skillCheck: { consistent: true, complete: true },
+    }),
+  })
+  const handlers = createRouteHandlers(d)
+  const body = await (await handlers.fetch(post(ROUTES.export, {}))).json()
+
+  assert.equal(body.exported.exportPath, '/home/u/.dsh/settings-roam/export/2026-10-15-1500')
+  assert.equal(body.comparedWithRemote, false, '未配云端要如实说明差异不是与云端比出来的')
+})
+
+test('GET 导出被拒 —— 写文件不能由一次导航触发', async () => {
+  const handlers = createRouteHandlers(deps())
+  assert.equal((await handlers.fetch(get(ROUTES.export))).status, 405)
+})
+
+test('导出失败时回的是可显示的话，且不留下待确认状态', async () => {
+  const d = deps({
+    preparePush: async () => { throw new Error('导出目录不可写') },
+  })
+  const handlers = createRouteHandlers(d)
+
+  const res = await handlers.fetch(post(ROUTES.export, {}))
+  assert.equal(res.status, 500)
+  assert.match((await res.json()).error, /导出目录不可写/)
+
+  // 导出没有留下 pending：随后一次确认应当仍报「还没预览过」
+  const confirm = await handlers.fetch(post(ROUTES.push, { step: 'confirm', token: 'x' }))
+  assert.equal(confirm.status, 409)
 })

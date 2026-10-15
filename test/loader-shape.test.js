@@ -590,3 +590,27 @@ test('推送与拉取都走「预览→确认」两段，没有一键直发', as
     '按钮不得直接触发确认',
   )
 })
+
+test('动作区第一个是「导出到文件」—— 唯一不依赖云端仓库的动作', async () => {
+  const exported = await loadClient('export-btn')
+  const clicked = []
+  const section = render(exported.Section({
+    state: { kind: 'clean' },
+    actions: { onExport: () => clicked.push('export'), onPull: () => {}, onPush: () => {} },
+  }))
+  const actionsEl = section.children.find(c => c?.props?.className === 'roam-actions')
+  const buttons = actionsEl.children.filter(c => c?.type === 'button')
+
+  assert.equal(buttons[0].children[0], '导出到文件', '第一次打开这一节最该点的是它')
+  assert.deepEqual(buttons.slice(1).map(b => b.children[0]), ['拉取', '推送'])
+  buttons[0].props.onClick()
+  assert.deepEqual(clicked, ['export'])
+})
+
+test('导出不经过确认流程 —— 无副作用的本地动作不该多点两次', async () => {
+  const src = read('client.js')
+  const body = src.slice(src.indexOf('const beginExport'), src.indexOf('/** 统一处理'))
+  assert.ok(body.includes("ROUTES.export"), '导出要打导出路由')
+  assert.ok(!body.includes('pending'), '导出不产生待确认状态')
+  assert.ok(!body.includes("step:"), '导出没有 prepare/confirm 两段')
+})

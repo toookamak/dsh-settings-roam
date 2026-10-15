@@ -40,6 +40,7 @@ window.__ModuleLoader__.load({
      */
     const ROUTES = {
       status: '/api/settings-roam.status',
+      export: '/api/settings-roam.export',
       push: '/api/settings-roam.push',
       pull: '/api/settings-roam.pull',
     }
@@ -170,6 +171,9 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'roam-actions' },
+          // 「导出」排在第一个：它是唯一不依赖云端仓库的动作，
+          // 也是用户第一次打开这一节时最该点的那个——先把要备份的东西取出来看看。
+          h('button', { type: 'button', onClick: () => actions?.onExport?.() }, '导出到文件'),
           h('button', { type: 'button', onClick: () => actions?.onPull?.() }, '拉取'),
           h('button', { type: 'button', onClick: () => actions?.onPush?.() }, '推送'),
           h(Pending, { state, actions }),
@@ -240,6 +244,22 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => { load() }, [load])
 
+      /**
+       * 本地导出：一次性、无副作用，不走确认流程。
+       *
+       * 它只往导出目录写副本，不改本机配置也不碰远端，所以没有需要用户
+       * 点头的地方。结果同样给概述与落盘路径——用户据此去打开核对。
+       */
+      const beginExport = React.useCallback(async () => {
+        setState({ kind: 'busy', text: '正在把要备份的内容导出到文件…' })
+        try {
+          const done = await request(ROUTES.export, {})
+          setState({ kind: 'clean', overview: done.overview ?? null })
+        } catch (error) {
+          setState({ kind: 'error', message: error.message })
+        }
+      }, [])
+
       /** 统一处理「预览 → 确认」两段。 */
       const begin = React.useCallback(async (kind) => {
         const route = kind === 'push' ? ROUTES.push : ROUTES.pull
@@ -285,6 +305,7 @@ window.__ModuleLoader__.load({
       }, [state.pending, state.overview])
 
       const actions = {
+        onExport: beginExport,
         onPush: () => begin('push'),
         onPull: () => begin('pull'),
         onConfirm: confirm,

@@ -119,6 +119,12 @@ export function apply(ctx, config) {
     return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
   }
 
+  // 可选注入：服务出现时捕获引用，始终不出现时这个回调不会运行（也就不会抛错）。
+  let pluginManagerRef
+  ctx.inject(['pluginManager'], (scope) => {
+    pluginManagerRef = scope.pluginManager
+  })
+
   // 后端惰性构造：仓库地址只能由用户填，YAML 里传不进对象实例。
   // 传工厂而不是实例，装配阶段就不会因子配置而崩掉（真装载验收的教训）。
   const service = createSyncService({
@@ -128,10 +134,16 @@ export function apply(ctx, config) {
     // 校验通道：直读文件是主通道，ctx.skills 是交叉校验通道。
     // 不传它读路径就退化成单通道——最坏情况是静默同步错内容而不是报警。
     skillService: ctx.skills,
-    // 插件名单采集口。用 getter 而不是直接传 ctx.pluginManager：
-    // 该服务可能比本插件晚就绪，装配那一刻取到的是 undefined。
-    // 惰性取值保证「推送时」拿到的是当时的真实服务。
-    pluginManager: () => ctx.pluginManager,
+    // 插件名单采集口。
+    //
+    // 这里绕了两道，都是真装载验收逼出来的：
+    //   1. 不能直接读 ctx.pluginManager。Cordis 的 DI 纪律是「没 inject 过就
+    //      不许取」——实测报 `cannot get property "pluginManager" without inject`
+    //      （一次 500，导出整条路径挂掉）。而 pluginManager 刻意不在 inject 里：
+    //      它缺了只是少一份插件名单，不该让整个插件不启动。
+    //   2. 也不能在装配那一刻就把值取出来：该服务可能比本插件晚就绪。
+    // 所以用可选注入捕获一个引用，再由 getter 惰性返回当时的值。
+    pluginManager: () => pluginManagerRef,
     backend: () => {
       const repoUrl = readOption('repoUrl')
       if (repoUrl === null) {
