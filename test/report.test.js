@@ -68,3 +68,49 @@ test('跳过原因常量表覆盖设计规定的全部取值', () => {
     ['build-blocked', 'local-path-source', 'registry-unreachable', 'unknown', 'version-incompatible'],
   )
 })
+
+// ─── 校验结果必须到达用户眼前（缺口 A 的下半截）────────────────────
+// 光把校验接上还不够：结果若只留在内部对象里，用户依然看不见。
+
+test('两路核对不一致时，报告里必须出现可读的说明', () => {
+  const report = {
+    applied: [{ name: 'llm-pi-ai', kind: 'patch' }],
+    skillCheck: {
+      checked: true,
+      consistent: false,
+      complete: true,
+      onlyDirect: ['alpha'],
+      onlyService: ['beta'],
+    },
+  }
+
+  const view = buildReportView(report)
+  const text = view.notices.join('\n')
+
+  assert.match(text, /两路核对不一致/, '必须有一条说明')
+  assert.match(text, /beta/, '要点名服务视图里有而目录里没有的')
+  assert.match(text, /alpha/, '也要点名目录里有的')
+})
+
+test('核对一致时不产生噪音', () => {
+  const report = {
+    applied: [{ name: 'llm-pi-ai', kind: 'patch' }],
+    skillCheck: { checked: true, consistent: true, complete: true, onlyDirect: [], onlyService: [] },
+  }
+
+  const view = buildReportView(report)
+  assert.ok(
+    !view.notices.join('\n').includes('两路核对不一致'),
+    '一致时不该提示不一致',
+  )
+})
+
+test('没跑校验时不提示，不制造「已核对」的假象', () => {
+  const report = {
+    applied: [{ name: 'llm-pi-ai', kind: 'patch' }],
+    skillCheck: { checked: false, consistent: true, complete: false, onlyDirect: [], onlyService: [] },
+  }
+
+  const view = buildReportView(report)
+  assert.ok(!view.notices.join('\n').includes('两路核对'))
+})

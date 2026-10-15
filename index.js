@@ -43,6 +43,9 @@ export function apply(ctx, config) {
   // 传工厂而不是实例，装配阶段就不会因子配置而崩掉（真装载验收的教训）。
   const service = createSyncService({
     dshRoot,
+    // 校验通道：直读文件是主通道，ctx.skills 是交叉校验通道。
+    // 不传它读路径就退化成单通道——最坏情况是静默同步错内容而不是报警。
+    skillService: ctx.skills,
     backend: () => createGitBackend({
       repoUrl: config?.repoUrl,
       workDir: join(dshRoot, 'settings-roam', 'work'),

@@ -20,7 +20,7 @@ import { extractShared } from './extract.js'
 import { buildSnapshot, serializeSnapshot } from './snapshot.js'
 import { diffSnapshots, summarizeDiff } from './diff.js'
 import { applyPatchFile, verifyWriteBack } from './apply.js'
-import { scanSkills, listSkillNames } from './skills.js'
+import { scanSkills, listSkillNames, crossCheckSkills } from './skills.js'
 import { assertBackend } from './backends/index.js'
 
 /** 云端布局，见设计 §5.1。 */
@@ -76,6 +76,15 @@ export function collectApiKeyRefs(rows) {
 export function createSyncService(config) {
   const { dshRoot } = config
   const skillsRoot = config.skillsRoot ?? join(dshRoot, 'skills')
+
+  /**
+   * 校验通道用的技能服务（ctx.skills）。没传就跳过校验。
+   *
+   * 为什么要它：直读文件是主通道，但它只能看见「文件在不在」，
+   * 看不见「这个技能是不是来自非本机的 provider」。少了这条校验，
+   * 读路径就退化成单通道，最坏情况是静默同步错内容而不是报警。
+   */
+  const skillService = config.skillService ?? null
 
   /** 已建好的后端实例，惰性缓存，避免重复建。 */
   let resolved = null
@@ -137,6 +146,48 @@ export function createSyncService(config) {
     return out
   }
 
+  /**
+   * 直读结果与服务视图交叉校验。
+   *
+   * 不一致本身不是故障：它说明有技能来自非本机的 provider 来源。
+   * 但这件事必须让用户看见——推送时会把直读到的东西带走，
+   * 若服务视图里有而直读里没有，那部分不会被同步，用户有权先知道。
+   *
+   * @returns {Promise<{checked: boolean, consistent: boolean, complete: boolean, onlyDirect: string[], onlyService: string[]}>}
+   */
+  async function crossCheck() {
+    const directNames = listSkillNames(skillsRoot)
+    if (skillService === null) {
+      // 没接校验通道时如实说明「没验」，不假装验过了。
+      return { checked: false, consistent: true, complete: false, onlyDirect: [], onlyService: [] }
+    }
+
+    let result
+    try {
+      result = await crossCheckSkills(skillService, directNames)
+    } catch (error) {
+      // 校验通道自身坏了，不该拖垮推送，但必须留下痕迹。
+      return {
+        checked: false,
+        consistent: true,
+        complete: false,
+        onlyDirect: [],
+        onlyService: [],
+        error: String(error?.message ?? error),
+      }
+    }
+
+    const serviceSet = new Set(result.serviceNames)
+    const directSet = new Set(directNames)
+    return {
+      checked: true,
+      consistent: result.consistent,
+      complete: result.complete,
+      onlyDirect: directNames.filter(n => !serviceSet.has(n)).sort(),
+      onlyService: result.serviceNames.filter(n => !directSet.has(n)).sort(),
+    }
+  }
+
   return {
     /**
      * 推送准备：组装要写入云端的文件与差异。**只读，不写任何地方。**
@@ -153,6 +204,9 @@ export function createSyncService(config) {
         { path: CLOUD_PATHS.patch, content: patchContent },
         ...Object.entries(collectSkillFiles()).map(([path, content]) => ({ path, content })),
       ]
+
+      // 双通道校验：直读是主通道，服务视图是校验通道。只读，不影响写入。
+      const skillCheck = await crossCheck()
       if (input.bundles !== undefined) {
         files.push({
           path: CLOUD_PATHS.bundles,
@@ -193,6 +247,7 @@ export function createSyncService(config) {
         diff,
         summary: summarizeDiff(diff),
         patchRows: patch,
+        skillCheck,
       }
     },
 
@@ -237,11 +292,17 @@ export function createSyncService(config) {
       }))
 
       const diff = diffSnapshots({ entries: localEntries }, { entries: remoteEntries })
+
+      // 拉取侧同样走双通道：云端带来的技能会落到本机，落地前先看清本机
+      // 服务视图里有什么。只读，不改任何地方。
+      const skillCheck = await crossCheck()
+
       return {
         diff,
         summary: summarizeDiff(diff),
         remoteRows,
         remotePatchText: patchText,
+        skillCheck,
       }
     },
 

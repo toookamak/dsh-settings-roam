@@ -82,5 +82,22 @@ export function buildReportView(report) {
     notices.push('配置已写入，需要重启 DSH 后生效。')
   }
 
+  // 双通道校验的结果：不一致不是故障，但用户有权知道哪些技能没被带走。
+  // 这条必须出现在报告里，否则「交叉校验」就只是内部日志，帮不到用户。
+  const check = report?.skillCheck
+  if (check?.checked === true && check.consistent === false) {
+    const parts = []
+    if (check.onlyService.length > 0) {
+      parts.push(`本机服务视图里有 ${check.onlyService.join('、')}，但目录里没有文件，`
+        + '这部分不会被同步')
+    }
+    if (check.onlyDirect.length > 0) {
+      parts.push(`${check.onlyDirect.join('、')} 在目录里但服务视图里没有，`
+        + '可能来自非本机的来源')
+    }
+    notices.push(`技能清单两路核对不一致：${parts.join('；')}。`
+      + '这不影响已经同步的内容，但建议先看一眼再继续。')
+  }
+
   return { applied, skipped, plugins, notices, empty: false }
 }

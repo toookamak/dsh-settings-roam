@@ -237,3 +237,87 @@ test('服务暴露数据根目录，供界面与诊断显示', () => {
   assert.equal(service.dshRoot, dshRoot)
   rmSync(root, { recursive: true })
 })
+
+// ─── 双通道校验接线（缺口 A）────────────────────────────────────────
+// 背景：crossCheckSkills 实现了、有测试，但全仓库零调用点。
+// 机制正确却没有接上，等于安全网不在。以下用例锁死「接上了」。
+
+test('推送准备会带上校验通道的结果，并逐个列出差异项', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({
+    backend: fakeBackend(),
+    workDir,
+    dshRoot,
+    skillsRoot,
+    // 服务视图只认得别的技能：与直读（demo）不一致
+    skillService: { snapshot: async () => ({ skills: [{ name: 'other' }], complete: true }) },
+  })
+
+  const plan = await service.preparePush({ generatedBy: 'test' })
+
+  assert.equal(plan.skillCheck.checked, true, '接上了校验通道就必须标记已校验')
+  assert.equal(plan.skillCheck.consistent, false)
+  assert.deepEqual(plan.skillCheck.onlyDirect, ['demo'], '直读有、服务没有')
+  assert.deepEqual(plan.skillCheck.onlyService, ['other'], '服务有、直读没有')
+  rmSync(root, { recursive: true })
+})
+
+test('两路一致时 consistent 为真', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({
+    backend: fakeBackend(),
+    workDir,
+    dshRoot,
+    skillsRoot,
+    skillService: { snapshot: async () => ({ skills: [{ name: 'demo' }], complete: true }) },
+  })
+
+  const plan = await service.preparePush({ generatedBy: 'test' })
+  assert.equal(plan.skillCheck.checked, true)
+  assert.equal(plan.skillCheck.consistent, true)
+  assert.equal(plan.skillCheck.complete, true, 'snapshot.complete 要透传出来')
+  rmSync(root, { recursive: true })
+})
+
+test('没接校验通道时如实报「没验」，不假装验过', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({ backend: fakeBackend(), workDir, dshRoot, skillsRoot })
+
+  const plan = await service.preparePush({ generatedBy: 'test' })
+  assert.equal(plan.skillCheck.checked, false)
+  assert.equal(plan.skillCheck.consistent, true, '没验就谈不上不一致')
+  rmSync(root, { recursive: true })
+})
+
+test('校验通道自身抛错不拖垮推送，但留下痕迹', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({
+    backend: fakeBackend(),
+    workDir,
+    dshRoot,
+    skillsRoot,
+    skillService: { snapshot: async () => { throw new Error('服务暂时不可用') } },
+  })
+
+  const plan = await service.preparePush({ generatedBy: 'test' })
+  assert.equal(plan.skillCheck.checked, false)
+  assert.match(plan.skillCheck.error, /服务暂时不可用/)
+  assert.ok(plan.files.length > 0, '校验失败不该让推送准备整体失败')
+  rmSync(root, { recursive: true })
+})
+
+test('preparePull 同样只读地跑校验', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({
+    backend: fakeBackend({ 'config/profile.patch.yml': PATCH }),
+    workDir,
+    dshRoot,
+    skillsRoot,
+    skillService: { snapshot: async () => ({ skills: [{ name: 'demo' }], complete: true }) },
+  })
+
+  const plan = await service.preparePull()
+  assert.equal(plan.skillCheck.checked, true)
+  assert.equal(plan.skillCheck.complete, true)
+  rmSync(root, { recursive: true })
+})
