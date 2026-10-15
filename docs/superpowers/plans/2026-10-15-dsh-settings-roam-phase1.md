@@ -2776,6 +2776,205 @@ git commit -m "服务：推送与拉取各拆 prepare/confirm 两段，确认点
 
 ---
 
+### Task 13: 恢复报告
+
+设计 §5.2 定义了 `RestoreReport` 结构，设计决策 8 补了一条产品要求：**恢复后的「体验断裂」必须显式提示**——主题、权限、默认模型已判为本机，拉取完成后界面与默认行为和来源机器不同，用户可能误以为恢复失败。
+
+本任务的职责不只是格式化数据，而是**把机器状态翻译成人能看懂的话**。设计 §3.4 第 2 条说得很直白：跳过时「不能只报一句失败」。
+
+**Files:**
+- Create: `src/report.js`
+- Test: `test/report.test.js`
+
+- [ ] **Step 1: 写失败测试**
+
+创建 `test/report.test.js`：
+
+```js
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { SKIP_REASONS, explainSkip, buildReportView } from '../src/report.js'
+
+test('四类跳过原因都有针对性的说明，不是一句「失败」', () => {
+  const seen = new Set()
+  for (const reason of ['local-path-source', 'version-incompatible', 'registry-unreachable', 'build-blocked', 'unknown']) {
+    const text = explainSkip({ reason, name: 'demo-plugin' })
+    assert.ok(typeof text === 'string' && text.length > 10, `${reason} 应有足够具体的说明`)
+    seen.add(text)
+  }
+  assert.equal(seen.size, 5, '每类原因的说明必须彼此不同')
+})
+
+test('两种跳过原因指向同一个插件时，说明也不相同', () => {
+  const a = explainSkip({ reason: 'local-path-source', name: 'demo' })
+  const b = explainSkip({ reason: 'build-blocked', name: 'demo' })
+  assert.notEqual(a, b)
+})
+
+test('本机路径来源的说明要指出原始路径', () => {
+  const text = explainSkip({ reason: 'local-path-source', name: 'demo', detail: '/home/alice/src/demo' })
+  assert.ok(text.includes('/home/alice/src/demo'), '要指出是哪条路径')
+})
+
+test('版本不兼容要说明这是保护而非故障', () => {
+  const text = explainSkip({ reason: 'version-incompatible', name: 'demo' })
+  assert.ok(/保护|不是故障|并非故障/.test(text), '要让用户理解这不是故障')
+})
+
+test('跳过时必须能看出这个插件当前到底装没装', () => {
+  const view = buildReportView({
+    applied: [],
+    skipped: [{ kind: 'plugin', name: 'demo', result: 'skipped', reason: 'build-blocked' }],
+    needsRestart: false,
+    needsCredentials: [],
+    backupPath: '/tmp/bk',
+  })
+  assert.equal(view.plugins.length, 1)
+  assert.ok(view.plugins[0].installed === false, '应明确标出未安装')
+})
+
+test('报告要提示本机偏好未随行，避免被误读为恢复失败', () => {
+  const view = buildReportView({
+    applied: [{ kind: 'file', name: 'patch:llm-pi-ai', result: 'ok' }],
+    skipped: [],
+    needsRestart: true,
+    needsCredentials: ['DEMO_KEY'],
+    backupPath: '/tmp/bk',
+  })
+  assert.ok(view.notices.some(n => n.includes('本机')), '应有本机偏好说明')
+  assert.ok(view.notices.some(n => n.includes('DEMO_KEY')), '应列出要补的密钥')
+  assert.ok(view.notices.some(n => n.includes('重启')), '应提示重启')
+  assert.equal(view.empty, false)
+})
+
+test('空报告不产生误导性的提示', () => {
+  const view = buildReportView({
+    applied: [], skipped: [], needsRestart: false, needsCredentials: [], backupPath: '/b',
+  })
+  assert.equal(view.empty, true)
+  assert.deepEqual(view.notices, [], '没有变化时不应提示重启或密钥')
+})
+
+test('跳过原因常量表覆盖设计规定的全部取值', () => {
+  assert.deepEqual(
+    [...SKIP_REASONS].sort(),
+    ['build-blocked', 'local-path-source', 'registry-unreachable', 'unknown', 'version-incompatible'],
+  )
+})
+```
+
+- [ ] **Step 2: 运行测试，确认失败**
+
+运行：`node --test test/report.test.js`
+预期：FAIL，`Cannot find module '../src/report.js'`
+
+- [ ] **Step 3: 实现报告模块**
+
+创建 `src/report.js`：
+
+```js
+/**
+ * 恢复报告：把机器状态翻译成人能看懂的话。
+ *
+ * 设计 §3.4 第 2 条：「失败即跳过并显示，不能只报一句失败」。
+ * 所以这里的核心不是格式化，而是为每一类跳过原因给出一条具体、可据以行动的说明。
+ *
+ * 设计决策 8 另有一条产品要求：恢复后的「体验断裂」要显式提示。
+ * 主题、权限、默认模型已判为本机，拉取完成后界面与默认行为和来源机器不同，
+ * 用户很可能误以为恢复失败。这句话必须出现在报告里，而不是留给用户自己猜。
+ */
+
+/** 跳过原因，取值见设计 §5.2 的 SkipReason。 */
+export const SKIP_REASONS = Object.freeze([
+  'local-path-source',
+  'version-incompatible',
+  'registry-unreachable',
+  'build-blocked',
+  'unknown',
+])
+
+/**
+ * 为一类跳过原因给出说明。
+ * @param {{reason: string, name: string, detail?: string}} item
+ * @returns {string}
+ */
+export function explainSkip(item) {
+  const { reason, name } = item
+  const detail = item.detail ?? ''
+  switch (reason) {
+    case 'local-path-source':
+      return `${name} 来自本机的目录路径${detail === '' ? '' : `（${detail}）`}，这台机器上没有这个目录。`
+        + '把它发布到 registry 或 git 之后才能同步过来。'
+    case 'version-incompatible':
+      return `${name} 要求的 DSH 版本与这台机器不一致，官方安装流程拒绝了安装。`
+        + '这是保护而不是故障——版本不符时装上去会让 DSH 起不来。'
+        + '把两台机器的 DSH 升到同一版本后重试。'
+    case 'registry-unreachable':
+      return `${name} 没能从 registry 取到包，可能是网络或 registry 地址不通。`
+        + '确认这台机器能访问 npm registry，然后再拉取一次。'
+    case 'build-blocked':
+      return `${name} 的安装脚本需要批准后才能运行。`
+        + '在 DSH 里批准这个插件的构建脚本，然后重新拉取。'
+    default:
+      return `${name} 未能恢复，原因不明。`
+        + '它的配置没有被修改；可以单独重试这一个插件。'
+  }
+}
+
+/**
+ * 把 RestoreReport 转成界面与提示可用的视图模型。
+ * @param {object} report - RestoreReport，见设计 §5.2
+ * @returns {{applied: object[], skipped: object[], plugins: object[], notices: string[], empty: boolean}}
+ */
+export function buildReportView(report) {
+  const applied = report?.applied ?? []
+  const skipped = report?.skipped ?? []
+  const needsCredentials = report?.needsCredentials ?? []
+
+  const plugins = skipped
+    .filter(item => item.kind === 'plugin')
+    .map(item => ({
+      name: item.name,
+      // 设计 §3.4 第 3 条：跳过时必须能看出这个插件当前装没装。
+      installed: false,
+      explanation: explainSkip(item),
+    }))
+
+  const notices = []
+  if (applied.length === 0 && skipped.length === 0) {
+    return { applied, skipped, plugins, notices: [], empty: true }
+  }
+
+  if (applied.length > 0) {
+    notices.push('本机的主题、工具权限预设与默认模型属于本机配置，不会随拉取改变，'
+      + '所以界面与默认行为和来源机器可能不同。这不是恢复失败。')
+  }
+  if (needsCredentials.length > 0) {
+    notices.push(`以下环境变量需要在每台机器上各自配置：${needsCredentials.join('、')}。`
+      + '密钥本身不进云端，缺了它会一发消息就认证失败。')
+  }
+  if (report?.needsRestart === true) {
+    notices.push('配置已写入，需要重启 DSH 后生效。')
+  }
+
+  return { applied, skipped, plugins, notices, empty: false }
+}
+```
+
+- [ ] **Step 4: 运行测试，确认通过**
+
+运行：`node --test test/report.test.js`
+预期：PASS，8 个测试通过
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add src/report.js test/report.test.js
+git commit -m "报告：四类跳过原因各给可行动的说明，并提示本机偏好未随行"
+```
+
+---
+
 ## 验证结论存档
 
 V1 验证的原始脚本与输出，正式化后归档于：
