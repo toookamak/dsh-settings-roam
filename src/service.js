@@ -59,12 +59,62 @@ export function collectApiKeyRefs(rows) {
 
 /**
  * 建一个同步服务。
- * @param {{backend: object, workDir: string, dshRoot: string, skillsRoot?: string}} config
+ *
+ * backend 可以是实例，也可以是一个返回实例的函数（或 undefined）。
+ *
+ * 为什么允许后两者——真装载验收暴露的设计错误：
+ * 最初这里无条件 assertBackend(backend)，要求装配时就有一个完整后端。
+ * 但后端的仓库地址与工作目录只能由用户在界面上填，YAML 配置里传不进对象实例，
+ * 于是插件每次启动都在 apply 阶段崩溃，整个条目不激活（Loader 报
+ * 「1 entry did not activate」）。插件应当能装着但待配置，而不是装不上。
+ *
+ * 因此：装配阶段只记录「怎么拿到后端」，真正要用时才解析；
+ * 未配置时由调用方拿到明确的「还没配置」错误，而不是一个空指针。
+ *
+ * @param {{backend?: object|(() => object), dshRoot: string, skillsRoot?: string}} config
  */
 export function createSyncService(config) {
-  const { backend, workDir, dshRoot } = config
+  const { dshRoot } = config
   const skillsRoot = config.skillsRoot ?? join(dshRoot, 'skills')
-  assertBackend(backend)
+
+  /** 已建好的后端实例，惰性缓存，避免重复建。 */
+  let resolved = null
+
+  /**
+   * 取后端实例。未配置时抛出可据以行动的说明。
+   * @returns {object}
+   */
+  function requireBackend() {
+    if (resolved !== null) return resolved
+    const source = config.backend
+    if (typeof source === 'function') {
+      if (backendFactoryBroken !== null) throw backendFactoryBroken
+      resolved = source()
+    } else {
+      resolved = source ?? null
+    }
+    if (resolved === null) {
+      throw new Error('还没配置云端仓库。先在插件设置里填上仓库地址。')
+    }
+    assertBackend(resolved)
+    return resolved
+  }
+
+  /** 工厂自身抛错时记住它，避免每次调用都重跑一遍失败逻辑。 */
+  let backendFactoryBroken = null
+
+  /**
+   * 是否已具备同步条件。界面用它决定显示「拉取」还是「去配置」。
+   * @returns {boolean}
+   */
+  function isConfigured() {
+    try {
+      requireBackend()
+      return true
+    } catch {
+      return false
+    }
+  }
 
   const patchFile = join(dshRoot, 'cordis.patch.yml')
 
@@ -94,6 +144,7 @@ export function createSyncService(config) {
      * @returns {Promise<{files: {path: string, content: string}[], diff: object[], summary: object}>}
      */
     async preparePush(input = {}) {
+      const backend = requireBackend()
       const rows = readLocalRows()
       const { patch } = extractShared({ patchRows: rows })
 
@@ -152,6 +203,7 @@ export function createSyncService(config) {
      * @param {string} [message]
      */
     async confirmPush(plan, message = '设置漫游：推送') {
+      const backend = requireBackend()
       await backend.ensureReady()
       for (const file of plan.files) {
         await backend.writeFile(file.path, file.content)
@@ -165,6 +217,7 @@ export function createSyncService(config) {
      * @returns {Promise<{diff: object[], summary: object, remoteRows: object[]}>}
      */
     async preparePull() {
+      const backend = requireBackend()
       await backend.ensureReady()
       await backend.pull()
 
@@ -232,5 +285,17 @@ export function createSyncService(config) {
         backupPath: options?.backupRoot ?? '',
       }
     },
+
+    /**
+     * 是否已具备同步条件。
+     *
+     * 界面用它决定显示「拉取」还是「去配置云端仓库」。
+     * 插件装上了但还没配仓库是正常状态，不是故障。
+     * @returns {boolean}
+     */
+    isConfigured,
+
+    /** 数据根目录，供界面与诊断显示。 */
+    dshRoot,
   }
 }

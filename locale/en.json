@@ -1,0 +1,11 @@
+{
+  "meta": {
+    "title": "Settings Roam",
+    "description": "Push portable settings to the cloud, pull them back on a new machine."
+  },
+  "nav": "Settings Roam",
+  "section": {
+    "pull": "Pull",
+    "push": "Push"
+  }
+}

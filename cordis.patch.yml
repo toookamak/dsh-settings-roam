@@ -1,0 +1,12 @@
+# 设置漫游的装载声明：把自己插进 profile 的层栈。
+#
+# 为什么用 insert 而不是 id-patch：
+# 官方 Cordis-Patch 的 id-patch 打在不存在的行上会静默跳过，只在 warn 回调里
+# 报一句 `patch: entry <id> not found`，不抛错。插件首次安装时目标行必然不存在，
+# 用 id-patch 会导致插件永远装不上且没有任何报错。
+#
+# name 必须是裸包名：客户端模块系统只把浏览器半侧挂到说明符恰为裸包名的那一行上，
+# 写成子路径导出（如 .../client）会让界面永远不出现。
+- insert:
+    - id: dsh-settings-roam
+      name: '@toookamak/dsh-settings-roam'

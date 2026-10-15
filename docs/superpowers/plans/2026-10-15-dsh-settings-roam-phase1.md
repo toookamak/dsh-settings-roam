@@ -2975,6 +2975,420 @@ git commit -m "报告：四类跳过原因各给可行动的说明，并提示�
 
 ---
 
+### Task 14: 插件装载层与设置界面
+
+把已经写好但**还装不进 DSH** 的插件骨架补齐：`index.js`（宿主半侧）、`client.js`（浏览器半侧）、`cordis.patch.yml`、`icon.svg`、`locale/`。package.json 早已声明了这五样，但文件都不存在。
+
+#### 14.0 装载前必须知道的四条硬约束
+
+这四条是查官方源码与文档实测得到的，不是推断。任何一条搞错，插件都装不上或装上后界面空白。
+
+| # | 约束 | 依据 |
+|---|---|---|
+| E1 | 宿主提供的是**已构建**的客户端 bundle，缺失 bundle 会**明确导致激活失败** | `packages/client/modules/README.zh.md` 构建要求节 |
+| E2 | 浏览器半侧只挂在说明符恰为**裸包名**的那一行上；从子路径导出挂载的行永远不带半侧 | `docs/cookbook/adding-a-settings-card.zh.md` 第 5 节 |
+| E3 | `client.js` 必须是 **lazy-CJS factory** 格式：调用 `window.__ModuleLoader__.load({ id, factory })`，`factory(require)` 内用 `require('react')` 这类裸说明符解析依赖，**不要 import map、不要全局变量** | `packages/client/tsdown.client.ts` 文件头注释；官方 `packages/session-query/session-log-export/lib/client.js` 实际形态 |
+| E4 | 该格式**可以手写**——官方自己 12KB 的小 bundle 就是这个形态，不依赖特定打包器产物 | 同上实物比对 |
+
+**E4 是「纯 JS 无构建」路线成立的唯一依据。** 若 E4 不成立，就必须引入 tsdown + TypeScript，而 `clientBundle` 预设不在任何已发布的包里（文档原话：「仓库之外的包要自己复刻这一步构建」），代价会很大。所以本任务第一步是**先验证 E4**，再动手写界面。
+
+#### 14.1 界面决策（设计 §7.3，已定）
+
+| # | 决策 | 选择 |
+|---|---|---|
+| U1 | 推送前确认 | 每次推送都弹差异预览，等确认 |
+| U2 | 拉取入口 | 仅设置页一节（slot `settings.section`） |
+| U3 | 文案调性 | 极简，只给一句话 |
+
+**U3 与设计 §3.4 的张力必须显式处理**：§3.4 要求跳过时「不能只报一句失败」。U3 的「极简」指不铺垫、不解释设计意图，**不是省掉行动指引**。落到代码上就是：外层没有解释性引言，但每条跳过项仍带 `explainSkip()` 产出的那一句可行动说明（Task 13 已实现）。这两条不矛盾，但容易在实现时被误读成「界面只显示一个失败计数」，那会直接违反 §3.4。
+
+**U1 是服务层拆成 `preparePush` / `confirmPush` 两段的原因**（Task 12 已按此实现）。界面只负责把 `preview` 渲染出来并调用 `confirmPush`。
+
+#### 14.2 槽位 API（实测签名，照抄不要改）
+
+真实注册代码见 `packages/client/ui-agent-preset/src/client/index.ts:267-275`：
+
+```js
+ctx.slots.inject('settings.section', () => ctx.slots.register({
+  name: 'settings.section',
+  id: 'settings.roam',
+  order: 100,
+  label: () => ctx.locale.bind('settings.roam')('nav'),
+  locale: 'settings.roam',
+  inject: () => ({ ... }),
+}, SectionComponent))
+```
+
+三个候选落点在槽位树中的位置（`docs/subsystems/slots.zh.md`）：
+
+```
+sidebar
+├─ sidebar.panellist
+└─ sidebar.settings
+   └─ settings.section      ← U2 选定
+shell
+└─ shell.overlay
+```
+
+**注意**：`settings.section` 在槽位树里写作 `sidebar.settings.settings.section`，但其注册名是**字符串 `'settings.section'`**，不是路径。照抄上面实测签名。
+
+**Files:**
+- Create: `index.js`
+- Create: `client.js`
+- Create: `cordis.patch.yml`
+- Create: `icon.svg`
+- Create: `locale/zh.json`、`locale/en.json`
+- Create: `test/loader-shape.test.js`
+- Modify: `package.json`（补 `dsh.client`）
+
+---
+
+- [ ] **Step 1: 先验证 E4——手写 lazy-CJS bundle 能否被真装载**
+
+这一步是本任务的成立性前提，**必须先做**。在做界面之前，先写一个最小体量的 `client.js` 装进去，确认它被客户端模块系统接受。
+
+先写测试固化产物形态（真装载在 Step 8 手工验收）：
+
+创建 `test/loader-shape.test.js`：
+
+```js
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { readFileSync, existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+const read = p => readFileSync(join(root, p), 'utf8')
+
+test('package.json 声明的每个文件都真实存在', () => {
+  const pkg = JSON.parse(read('package.json'))
+  for (const f of pkg.files) {
+    // files 里的目录项也要存在
+    assert.ok(existsSync(join(root, f)), `package.json 的 files 声明了 ${f}，但文件不存在`)
+  }
+})
+
+test('客户端 bundle 是 lazy-CJS factory 形态（E3）', () => {
+  const src = read('client.js')
+  assert.match(src, /__ModuleLoader__\.load\(/, '必须调用 window.__ModuleLoader__.load')
+  assert.match(src, /factory\s*[:(]/, '必须提供 factory')
+  assert.ok(
+    !/^\s*import\s/m.test(src),
+    '不得使用 ESM import——解析靠注入的 require，不是 import map',
+  )
+})
+
+test('客户端 bundle 登记的 id 与包名一致', () => {
+  const pkg = JSON.parse(read('package.json'))
+  const src = read('client.js')
+  const id = pkg.name
+  assert.ok(src.includes(`"${id}"`) || src.includes(`'${id}'`), `bundle 里的 id 必须是 ${id}`)
+})
+
+test('浏览器半侧挂在裸包名那一行（E2）', () => {
+  const pkg = JSON.parse(read('package.json'))
+  assert.ok(pkg.dsh?.client, 'package.json 必须有 dsh.client')
+  assert.equal(pkg.dsh.client.platform, 'web')
+  assert.ok(Array.isArray(pkg.dsh.client.inject), 'inject 必须是数组')
+  assert.ok(
+    pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-settings'),
+    '要往设置分区贡献界面，必须 inject ui-settings',
+  )
+})
+
+test('宿主半侧导出 apply，且不依赖构建产物', () => {
+  const src = read('index.js')
+  assert.match(src, /export\s+(async\s+)?function\s+apply\s*\(/, '宿主半侧必须导出 apply')
+  assert.ok(!src.includes('lib/'), '宿主半侧不得引用 lib/ 构建产物')
+})
+
+test('patch 文件把自己插进 Loader（E1 的配套）', () => {
+  const src = read('cordis.patch.yml')
+  const pkg = JSON.parse(read('package.json'))
+  assert.match(src, /- insert:/, 'patch 必须用 insert 把自己插进 Loader')
+  assert.ok(src.includes(pkg.name), 'patch 里的 name 必须是裸包名（E2）')
+})
+```
+
+- [ ] **Step 2: 运行测试，确认全部失败**
+
+运行：`node --test test/loader-shape.test.js`
+
+预期：FAIL。报错指向 `index.js`、`client.js`、`cordis.patch.yml` 不存在。这正是要修的缺口。
+
+- [ ] **Step 3: 写 `cordis.patch.yml`**
+
+参照官方 `dshmarket` 的形态（`~/.dsh/profiles/web/node_modules/dshmarket/cordis.patch.yml`），它的 patch 极简，只有一行 insert：
+
+```yaml
+# dsh-settings-roam: inserts this plugin into the profile's layer stack.
+- insert:
+    - id: dsh-settings-roam
+      name: '@toookamak/dsh-settings-roam'
+```
+
+**用 insert 而不是 id-patch**：这与本项目 V1 验证的规则一（C1）一致——目标行不存在时必须 insert，id-patch 打空行会静默跳过并只在 warn 回调里报一句。我们自己的 patch 更要守这条。
+
+`name` 必须是**裸包名**（E2），写成子路径会导致浏览器半侧挂不上。
+
+- [ ] **Step 4: 写 `index.js`（宿主半侧）**
+
+宿主半侧的职责：注册一个工具供模型调用，把 Task 12 的服务暴露出去。**真实的工具注册 API 见官方 Task 相关文档**；本期先做到「插件能被加载、设置分区能出现」为止，工具注册若接口不确定就留 TODO 并在文档里记明，不要凭印象写。
+
+```js
+import { createSyncService } from './src/service.js'
+
+export const name = 'settings-roam'
+export const inject = ['settings', 'skills']
+
+/**
+ * 设置漫游的宿主半侧。
+ *
+ * 浏览器半侧（client.js）负责界面，这里只负责在宿主侧建立服务实例，
+ * 供界面经由槽位的 inject 与后续的工具调用使用。
+ */
+export function apply(ctx, config) {
+  const service = createSyncService({
+    dshRoot: config?.dshRoot,
+    backend: config?.backend,
+  })
+
+  // 供浏览器半侧读取的数据入口。挂在 ctx 上而不是导出模块级单例，
+  // 因为一个进程可能加载多份 profile。
+  ctx.settingsRoam = { service }
+
+  ctx.logger?.info?.('设置漫游已就绪')
+}
+```
+
+- [ ] **Step 5: 写 `client.js`（浏览器半侧，手写 lazy-CJS）**
+
+严格按 E3 的格式。下面是最小可用形态，依赖只取 `react` 与设置分区注入进来的能力：
+
+```js
+window.__ModuleLoader__.load({
+  id: '@toookamak/dsh-settings-roam',
+  factory: (require) => {
+    const React = require('react')
+
+    // U3：极简文案，只给一句话。
+    // 注意与设计 §3.4 的关系——极简指不铺垫，不是省掉行动指引。
+    function StatusLine({ state }) {
+      if (state.kind === 'empty-cloud') return React.createElement('div', null, '云端还没有内容。先在这台机器上推送一次。')
+      if (state.kind === 'has-diff') return React.createElement('div', null, `云端有 ${state.count} 项变化待拉取。`)
+      return React.createElement('div', null, '已与本机一致。')
+    }
+
+    function Section({ slots }) {
+      const view = slots?.report ?? { kind: 'clean' }
+      return React.createElement(
+        'div',
+        null,
+        React.createElement(StatusLine, { state: view }),
+      )
+    }
+
+    return { Section }
+  },
+})
+```
+
+**这一段就是 E4 的验证物**：它没有经过任何打包器，全是手写的普通 JS。若 Step 8 的真装载通过，则「纯 JS 无构建」路线成立，后续界面继续用这个形态扩写；若不通过，则必须在这里停下，引入 tsdown 并把结论写回设计文档。
+
+- [ ] **Step 6: 补 `package.json` 的 `dsh.client` 与 `icon.svg`、`locale/`**
+
+`package.json` 补（保持 `bundle.patch` 不变，它是宿主半侧的装载）：
+
+```jsonc
+"dsh": {
+  "bundle": { "patch": ["./cordis.patch.yml"] },
+  "client": {
+    "platform": "web",
+    "inject": ["@deepseek-ai/dsh-client-ui-settings"]
+  }
+}
+```
+
+`icon.svg`：单色矢量图标，随主题着色，不含文字。
+
+`locale/zh.json` 与 `locale/en.json`，照官方 `dshmarket` 的形态：
+
+```json
+{
+  "meta": {
+    "title": "设置漫游",
+    "description": "把可移植的配置推到云端，在新机器上拉回来。"
+  }
+}
+```
+
+- [ ] **Step 7: 运行测试，确认通过**
+
+运行：`node --test test/loader-shape.test.js`
+预期：PASS，6 个测试通过
+
+再跑全量：`npm test`，确认既有 76 个用例没有回归。
+
+- [ ] **Step 8: 真装载验收（本任务的关键一步，手工）**
+
+这一步**不能用单元测试替代**。E1／E4 是装载期的行为，只有真装一次才算验证。
+
+1. 把插件挂进一个测试 profile
+2. 启动 DSH，确认进程没有因缺 bundle 而激活失败（E1）
+3. 打开设置，确认「设置漫游」分区出现（U2 落点生效）
+4. 确认界面渲染出文案（E4 成立）
+
+**若第 4 步界面空白但分区在**：说明 bundle 格式有偏差，回到 E3 逐条对照。
+**若第 2 步就激活失败**：说明 E1 被触发，检查 `dsh.client` 是否声明完整。
+
+把这次验收的结论（通过或偏差）追加到本任务末尾，作为 E4 的实测记录。
+
+#### 14.3 真装载验收实测记录（2026-10-15）
+
+**结论：E4 成立，「纯 JS 无构建」路线可用。同时暴露三个单元测试抓不到的缺陷。**
+
+验收脚本：`scripts/verify-load.mjs`（可重复执行，自建隔离 DSH_HOME，不碰用户 profile）。
+
+**通过的项：**
+
+| 项 | 结果 |
+|---|---|
+| 手写 lazy-CJS bundle 被模块加载器接受 | ✓ 登记的 id 是裸包名，`factory(require)` 内 `require('react')` 正常解析 |
+| 插件条目进入 Loader 组合树 | ✓ `--dump-config` 出现 `# == @toookamak/dsh-settings-roam` 层注释 |
+| 插件被成功激活 | ✓ 启动时无 `1 entry did not activate` 告警 |
+| DSH 正常启动到服务监听阶段 | ✓ |
+
+**暴露的三个缺陷（按发现顺序，全部由真装载发现，单元测试零覆盖）：**
+
+1. **数据根目录取到 undefined**
+   `apply` 把 `dshRoot` 当成 `config` 字段，而 `cordis.patch.yml` 里根本没有它，
+   于是 `join(undefined, ...)` 崩溃。**教训：DSH 装在哪是运行环境事实，不是用户配置。**
+   用户不可能知道也不该被要求填一个绝对路径。改为走官方语义解析（`src/home-paths.js`）。
+
+2. **后端必须在装配时就存在**
+   `createSyncService` 无条件 `assertBackend(backend)`，但仓库地址只能由用户在界面填，
+   YAML 里传不进对象实例。**教训：插件应当能「装着但待配置」，而不是装不上。**
+   改为惰性构造：`backend` 可以是实例、工厂或 undefined，未配置时给
+   「还没配置云端仓库」这样的可行动说明，并新增 `isConfigured()` 供界面判断。
+
+3. **直接往 ctx 赋值被 DI 拒绝**
+   `ctx.settingsRoam = {...}` 抛 `cannot set property "settingsRoam" without provide`。
+   **教训：Cordis 的 DI 纪律——服务必须经 `ctx.provide(name, value)` 注册**，
+   它同时提供了随 fiber 清理的 disposer，比模块级单例正确。
+   官方同类用法见 `packages/deliverables/workspace-changes/src/index.ts:120`。
+
+**第三个缺陷是这三个里最有价值的**：它说明「往 ctx 上挂东西」这个在普通 Node 里最自然的写法，
+在 Cordis 里是被明确禁止的。若不真装载一次，这个错误会一直潜伏到用户安装时才爆发。
+
+**顺带发现并修复的一处测试卫生问题：**
+`test/backends-git.test.js` 的 `sandbox()` 把裸库建在独立临时目录，但清理只删了 `root`，
+导致每跑一次测试就往 `/tmp` 残留一批目录（实测累积 78 个）。已改为 `cleanup()` 一并删除。
+
+**未能实测的一项（诚实标注）：** Step 8 第 3、4 步（设置分区出现、界面渲染文案）
+需要浏览器交互，本脚本只能验证到「宿主半侧激活 + 无装载期错误」。
+界面是否真的渲染出来，留待 Task 15 端到端演练用浏览器确认。
+
+- [x] **Step 9: 提交**
+
+```bash
+git add index.js client.js cordis.patch.yml icon.svg locale test/ scripts/ package.json src/service.js
+git commit -m "装载层：宿主半侧、手写 lazy-CJS 浏览器半侧与真装载验收"
+```
+
+---
+
+### Task 15: 端到端演练与验收
+
+前面 14 个任务都是分模块验证的。本任务把整条链路在真实环境里走一遍，验证的是**设计 §3.2／§3.3 的两个流程能否真的跑通**，而不是某个函数返回什么。
+
+**这一任务的价值在于发现「各模块都对、连起来不对」的问题。** 前 14 个任务各自绿灯并不能推出整链路成立——契约边界、时序、真实 DSH 的行为差异都只在这里暴露。
+
+**Files:**
+- Create: `docs/superpowers/plans/phase1-drill-log.md`（演练记录，含实测输出）
+
+- [ ] **Step 1: 准备两台机器状态（或两个 profile 模拟）**
+
+用两个独立的 `.dsh` 根目录模拟两台机器。准备主机 A 与从机 B，两者都配好一个可用的 git 后端（本地裸仓库即可，不需要真远端）。
+
+- [ ] **Step 2: 走通推送流程（设计 §3.2）**
+
+在 A 上执行推送的 prepare → 展示 diff → confirm 三段，逐项核对：
+
+| 核对项 | 预期 |
+|---|---|
+| 公共线只含 `llm-pi-ai` | patch 里只有这一项进快照 |
+| `webserver.host` 的局域网 IP **不在**快照里 | 这是本项目要解决的根本问题，必须确认 |
+| 未预期的盘外配置触发提示 | 设计 §7.3 的 insert 行风险有告警 |
+| 技能目录被收进去 | Task 5 的读写生效 |
+| 云端仓库出现一次提交 | git 后端工作正常 |
+
+- [ ] **Step 3: 走通拉取流程（设计 §3.3）**
+
+在 B 上执行拉取，逐项核对：
+
+| 核对项 | 预期 |
+|---|---|
+| B 的 `cordis.patch.yml` 里 `llm-pi-ai` 被更新 | 按条目合并写回生效 |
+| B 自己那 8 项本机配置**一处未动** | 按条目抽取的核心价值 |
+| B 的主题、权限、默认模型未变 | 本机判定生效 |
+| 报告里出现「本机偏好未随行」的提示 | 设计决策 8 |
+| 备份目录里有拉取前的副本 | 回退路径可用 |
+
+- [ ] **Step 4: 反向验证——故意造成失败，确认报告说得清楚**
+
+这一步验证的是**失败时用户能不能看懂**，而不是成功路径。
+
+1. 在快照里放一个来自本机路径的插件，再让 B 拉取 → 确认报告指出是哪条路径、说出来源机器
+2. 把 B 的备份恢复回去 → 确认回退可用
+
+- [ ] **Step 5: 记录演练结论**
+
+把每一步的实际输出与偏差写进 `docs/superpowers/plans/phase1-drill-log.md`。**偏差要原样记录，不要只写「通过」**——这是后续任务与二期决策的依据。
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add docs/superpowers/plans/phase1-drill-log.md
+git commit -m "演练：第一期端到端流程记录与偏差"
+```
+
+---
+
+### Task 16: 文档回写
+
+实现完成后，设计文档与 README 必须反映**实际做出来的东西**，而不是当初计划的东西。第一期已经出现过两次「计划假设与实测不符」，不回写就会一直误导后续开发。
+
+**已知需要回写的两处：**
+
+1. **设计 §2.3 关于 update() 失败行为的描述**——原文说匹配不到时「写失败也不报错」。V1 实测表明并非完全不报错，而是经 warn 回调报 `patch: entry <id> not found`（规则 C2）。这是**利好**：原设计假设「不能靠 try/catch 判断失败，必须写后回读」，现在多了更早更轻的信号源，应当在文档里写明。
+2. **README 第 60-62 行的「第一个待验证项」**——V1 已完成，该段的时态与措辞需要从「待验证」改为「已验证，结论见…」。
+
+**Files:**
+- Modify: `docs/superpowers/specs/2026-10-14-dsh-settings-roam-design.md`
+- Modify: `README.md`
+
+- [ ] **Step 1: 回写设计文档的 update() 失败行为**
+
+把 §2.3 的相关句子改为实测结论，并注明依据来自 V1 验证（`test/yaml-loader.test.js`）。保留原有的「必须写后回读」要求，但补充 warn 回调是更早的信号源。
+
+- [ ] **Step 2: 回写 README**
+
+第 60-62 行从「待验证」改成「已验证」，结论指向设计文档 §7.3 与 `test/yaml-loader.test.js`。同时更新 README 的「尚未存在的东西」清单——第一期做完后，那些东西大部分已经存在了，**这份清单必须与事实一致，否则它就是错误的文档**。
+
+- [ ] **Step 3: 核对设计文档的引文偏移**
+
+已知一处：设计文档引用 `packages/boot/plugin-manager/src/index.ts:323`，实际 `availability` 的赋值在 `:322`。校对设计文档中所有文件行号引用，修正偏移。
+
+- [ ] **Step 4: 提交**
+
+```bash
+git add docs/superpowers/specs/2026-10-14-dsh-settings-roam-design.md README.md
+git commit -m "文档回写：update() 失败行为、README 现状清单、引文行号"
+```
+
+---
+
 ## 验证结论存档
 
 V1 验证的原始脚本与输出，正式化后归档于：

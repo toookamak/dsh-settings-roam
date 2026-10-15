@@ -154,3 +154,79 @@ test('报告列出需要补的密钥引用名', async () => {
   assert.deepEqual(report.needsCredentials, ['FRESH_KEY'], '应指出缺哪个 key')
   rmSync(root, { recursive: true })
 })
+
+test('未配置后端时，装配不失败——插件能装着但待配置', () => {
+  // 真装载验收暴露的缺陷：最初 createSyncService 无条件 assertBackend，
+  // 结果 apply 一执行就抛错，整个 Loader 条目不激活。
+  // 插件应当能装上，只是还不能同步。
+  const { root, dshRoot } = sandbox()
+  const service = createSyncService({ dshRoot })
+  assert.equal(service.isConfigured(), false, '未配置时应报告未配置')
+  assert.equal(typeof service.preparePull, 'function', '服务本身应当可用')
+  rmSync(root, { recursive: true })
+})
+
+test('未配置后端时调用同步，给出可据以行动的说明而不是空指针', async () => {
+  const { root, dshRoot } = sandbox()
+  const service = createSyncService({ dshRoot })
+  await assert.rejects(
+    () => service.preparePull(),
+    /还没配置云端仓库/,
+    '错误信息要告诉用户去做什么，不能是 undefined is not a function',
+  )
+  rmSync(root, { recursive: true })
+})
+
+test('后端可以是工厂函数，装配时不立即构造', () => {
+  // 后端的仓库地址与工作目录只能由用户填，装配阶段拿不到。
+  // 允许传工厂，把「怎么建」与「什么时候建」分开。
+  const { root, dshRoot } = sandbox()
+  let built = 0
+  const service = createSyncService({
+    dshRoot,
+    backend: () => {
+      built += 1
+      return fakeBackend({})
+    },
+  })
+  assert.equal(built, 0, '装配时不得构造后端')
+  assert.equal(service.isConfigured(), true, '工厂能建出来即视为已配置')
+  assert.equal(built, 1, '首次询问时才构造一次')
+  service.isConfigured()
+  assert.equal(built, 1, '结果应缓存，不重复构造')
+  rmSync(root, { recursive: true })
+})
+
+test('工厂抛错时 isConfigured 返回 false 而不把异常抛出装配', () => {
+  const { root, dshRoot } = sandbox()
+  const service = createSyncService({
+    dshRoot,
+    backend: () => { throw new Error('仓库地址不合法') },
+  })
+  assert.equal(service.isConfigured(), false)
+  rmSync(root, { recursive: true })
+})
+
+test('缺方法的后端对象仍被挡下，不会带病运行', () => {
+  const { root, dshRoot } = sandbox()
+  const service = createSyncService({ dshRoot, backend: { pull: () => {} } })
+  assert.equal(service.isConfigured(), false, '接口不完整的后端不算已配置')
+  rmSync(root, { recursive: true })
+})
+
+test('配置后端后 isConfigured 为真，且能正常同步', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const remote = fakeBackend({})
+  const service = createSyncService({ backend: remote, dshRoot, skillsRoot, workDir })
+  assert.equal(service.isConfigured(), true)
+  const plan = await service.preparePush({ bundles: [] })
+  assert.ok(plan.diff !== undefined, '配置后应能算出差异')
+  rmSync(root, { recursive: true })
+})
+
+test('服务暴露数据根目录，供界面与诊断显示', () => {
+  const { root, dshRoot } = sandbox()
+  const service = createSyncService({ dshRoot })
+  assert.equal(service.dshRoot, dshRoot)
+  rmSync(root, { recursive: true })
+})

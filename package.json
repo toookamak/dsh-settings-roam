@@ -8,7 +8,8 @@
     ".": "./index.js",
     "./client": "./client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "index.js",
@@ -23,13 +24,20 @@
       "patch": [
         "./cordis.patch.yml"
       ]
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
     }
   },
   "scripts": {
     "test": "node --test"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "*"
+    "@deepseek-ai/cordis": "*",
+    "react": "^18.3.1"
   },
   "engines": {
     "node": ">=22"

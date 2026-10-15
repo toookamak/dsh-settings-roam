@@ -16,7 +16,18 @@ function bareRepo() {
 
 function sandbox() {
   const root = mkdtempSync(join(tmpdir(), 'roam-be-'))
-  return { root, work: join(root, 'work'), repo: bareRepo() }
+  const repo = bareRepo()
+  return {
+    root,
+    work: join(root, 'work'),
+    repo,
+    // 收尾必须把裸库一起删掉。它建在独立的临时目录里，
+    // 只删 root 会持续往 /tmp 里积压（实测累积到 78 个）。
+    cleanup() {
+      rmSync(root, { recursive: true, force: true })
+      rmSync(repo, { recursive: true, force: true })
+    },
+  }
 }
 
 test('后端接口只约定 5 个动作', () => {
@@ -36,17 +47,17 @@ test('接口校验：缺方法的对象被明确拒绝', () => {
 })
 
 test('ensureReady 克隆空的裸库并落盘，可重复调用', async () => {
-  const { root, work, repo } = sandbox()
+  const { work, repo, cleanup } = sandbox()
   const backend = createGitBackend({ repoUrl: repo, workDir: work })
   await backend.ensureReady()
   assert.ok(existsSync(join(work, '.git')), '工作区应已就绪')
   await backend.ensureReady()
   assert.ok(existsSync(join(work, '.git')), '重复调用不应报错')
-  rmSync(root, { recursive: true })
+  cleanup()
 })
 
 test('writeFile 落盘并推送到裸库，内容可被再次克隆读到', async () => {
-  const { root, work, repo } = sandbox()
+const { root, work, repo, cleanup } = sandbox()
   const backend = createGitBackend({ repoUrl: repo, workDir: work })
   await backend.ensureReady()
   await backend.writeFile('config/bundles.json', '{"official":["a"]}\n', '测试写入')
@@ -56,28 +67,28 @@ test('writeFile 落盘并推送到裸库，内容可被再次克隆读到', asyn
   const backend2 = createGitBackend({ repoUrl: repo, workDir: join(root, 'work2') })
   await backend2.ensureReady()
   assert.equal(await backend2.readFile('config/bundles.json'), '{"official":["a"]}\n')
-  rmSync(root, { recursive: true })
+  cleanup()
 })
 
 test('readFile 读不存在的路径返回 null，不抛错', async () => {
-  const { root, work, repo } = sandbox()
+  const { work, repo, cleanup } = sandbox()
   const backend = createGitBackend({ repoUrl: repo, workDir: work })
   await backend.ensureReady()
   assert.equal(await backend.readFile('config/nope.json'), null)
-  rmSync(root, { recursive: true })
+  cleanup()
 })
 
 test('writeFile 自动建立多级目录', async () => {
-  const { root, work, repo } = sandbox()
+  const { work, repo, cleanup } = sandbox()
   const backend = createGitBackend({ repoUrl: repo, workDir: work })
   await backend.ensureReady()
   await backend.writeFile('skills/demo/scripts/run.sh', '#!/bin/sh\n', '加技能')
   assert.ok(existsSync(join(work, 'skills', 'demo', 'scripts', 'run.sh')))
-  rmSync(root, { recursive: true })
+  cleanup()
 })
 
 test('pull 把裸库上的新提交取回工作区', async () => {
-  const { root, work, repo } = sandbox()
+const { root, work, repo, cleanup } = sandbox()
   const a = createGitBackend({ repoUrl: repo, workDir: work })
   await a.ensureReady()
   await a.writeFile('notes.md', 'first\n', '写记事本')
@@ -90,17 +101,17 @@ test('pull 把裸库上的新提交取回工作区', async () => {
 
   await a.pull()
   assert.equal(await a.readFile('notes.md'), 'second\n')
-  rmSync(root, { recursive: true })
+  cleanup()
 })
 
 test('无改动时 push 不产生空提交', async () => {
-  const { root, work, repo } = sandbox()
+  const { work, repo, cleanup } = sandbox()
   const backend = createGitBackend({ repoUrl: repo, workDir: work })
   await backend.ensureReady()
   await backend.writeFile('a.txt', 'x\n', '第一次')
   await backend.push('第一次')
   await assert.doesNotReject(() => backend.push('再推一次'))
-  rmSync(root, { recursive: true })
+  cleanup()
 })
 
 test('凭据边界：后端源码里不出现密钥相关字段', () => {
@@ -111,7 +122,7 @@ test('凭据边界：后端源码里不出现密钥相关字段', () => {
 })
 
 test('错误信息不泄露 URL 中的凭据', async () => {
-  const { root } = sandbox()
+  const { root, cleanup } = sandbox()
   const backend = createGitBackend({
     repoUrl: 'https://user:TOPSECRET@127.0.0.1:1/nonexistent.git',
     workDir: join(root, 'w'),
@@ -123,5 +134,5 @@ test('错误信息不泄露 URL 中的凭据', async () => {
       return true
     },
   )
-  rmSync(root, { recursive: true })
+  cleanup()
 })
