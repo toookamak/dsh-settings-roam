@@ -49,7 +49,7 @@ export const Config = z.object({
     '导出目录。推送前会先在这里落一份可以逐项核对的副本；留空时放在数据根目录下。',
   ).volatile(),
   importRoot: z.string().default('').description(
-    '【尚未生效】导入来源目录，用于从本程序导出的包里回填配置（第二阶段）。',
+    '导入来源目录，用于从本程序导出的包里回填配置。留空时去导出目录里找最新的一次。',
   ).volatile(),
 })
 
@@ -129,9 +129,10 @@ export function apply(ctx, config) {
   // 传工厂而不是实例，装配阶段就不会因子配置而崩掉（真装载验收的教训）。
   const service = createSyncService({
     dshRoot,
-    profileName: readOption('profileName') ?? undefined,
-    exportRoot: readOption('exportRoot') ?? undefined,
-    importRoot: readOption('importRoot') ?? undefined,
+    // 传整个 config 对象而不是四个快照值：DSH 改配置是原地更新运行中的
+    // config（config-editor 写盘前就 resolveConfig 了），插件不会被重新 apply，
+    // 所以快照值会永远停在装配那一刻——界面上填了、显示已保存、实际不生效。
+    options: config,
     // 校验通道：直读文件是主通道，ctx.skills 是交叉校验通道。
     // 不传它读路径就退化成单通道——最坏情况是静默同步错内容而不是报警。
     skillService: ctx.skills,

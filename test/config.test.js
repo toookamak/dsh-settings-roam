@@ -42,24 +42,13 @@ test('每个字段都有说明文字 —— 设置页上唯一的解释来源', 
   }
 })
 
-test('尚未生效的字段必须自称「尚未生效」', () => {
-  const dict = Config.dict
-  const notWired = ['importRoot']
-
-  for (const key of notWired) {
-    assert.match(
-      dict[key].meta.description, /尚未生效/,
-      `字段 ${key} 还没接入，说明里必须写明，否则用户会以为它已经在工作`,
-    )
-  }
-})
-
-test('已经生效的字段不得出现「尚未生效」', () => {
-  const dict = Config.dict
-
-  for (const key of ['repoUrl', 'profileName', 'exportRoot']) {
+test('四个字段都已接入，说明里不得再出现「尚未生效」', () => {
+  // 这条以前是反过来的：importRoot 当时是占位，必须自称「未生效」。
+  // 第二阶段落地后必须把话术撤掉——留着会让人以为填了没用，
+  // 而它现在确实会去那个目录里找包。
+  for (const key of ['repoUrl', 'profileName', 'exportRoot', 'importRoot']) {
     assert.doesNotMatch(
-      dict[key].meta.description, /尚未生效/,
+      Config.dict[key].meta.description, /尚未生效|占位/,
       `字段 ${key} 已经接入，说明里不该再标未生效`,
     )
   }

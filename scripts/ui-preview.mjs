@@ -20,6 +20,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { parsePatchList, renderPatches } from '../src/yaml-loader.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = resolve(here, '..')
@@ -73,19 +74,31 @@ if (added.status !== 0) {
 // 于是先插进来的那份（没有 config）赢，设置页写入会被判成
 // 「Configuration for ... is overridden by a home patch or command-line overlay」
 // 而失败——一个看起来像插件坏了、实际是预览脚本自己制造的假故障。
+//
+// 另一个更隐蔽的自伤：**不能把这个文件整个覆盖掉**。
+// 上一版在「已经组合进来」时把文件写成 `[]`，结果是把在界面上填过的
+// 仓库地址、导入目录一并抹掉——于是「填好设置 → 重启实例 → 看有没有生效」
+// 这条最需要验的路根本走不通，而症状看起来像插件没保存。
+// 现在只做两件事：清掉我们自己可能留下的重复条目，其余内容原样不动。
+const patchFile = join(profileDir, 'cordis.patch.yml')
 const composed0 = run(['--profile', profile, '--dump-config'])
 const alreadyComposed = (composed0.stdout ?? '').includes('dsh-settings-roam')
 
-// 需要补插时用 insert 而不是 id-patch：新建 profile 里条目必然不存在，C1 的教训。
-writeFileSync(join(profileDir, 'cordis.patch.yml'), alreadyComposed
-  ? ['# 插件已在 dsh.profile.bundles 里，这里保持空。', '[]', ''].join('\n')
-  : [
-    '# 由 ui-preview.mjs 生成，仅用于界面预览。',
-    '- insert:',
-    '    - id: dsh-settings-roam',
-    "      name: '@toookamak/dsh-settings-roam'",
-    '',
-  ].join('\n'))
+if (alreadyComposed) {
+  if (existsSync(patchFile)) {
+    const parsed = parsePatchList(readFileSync(patchFile, 'utf8'))
+    const kept = parsed.filter(row => row?.id !== 'dsh-settings-roam'
+      && !(Array.isArray(row?.insert) && row.insert.some(e => e?.id === 'dsh-settings-roam')))
+    if (kept.length !== parsed.length) {
+      writeFileSync(patchFile, renderPatches(kept, 'ui-preview 清理重复条目'))
+      console.log('已从 profile 的 cordis.patch.yml 里清掉重复的本插件条目（其余内容保留）。')
+    }
+  }
+} else {
+  const parsed = existsSync(patchFile) ? parsePatchList(readFileSync(patchFile, 'utf8')) : []
+  parsed.push({ insert: [{ id: 'dsh-settings-roam', name: '@toookamak/dsh-settings-roam' }] })
+  writeFileSync(patchFile, renderPatches(parsed, 'ui-preview 补插本插件'))
+}
 
 const composed = alreadyComposed ? composed0 : run(['--profile', profile, '--dump-config'])
 if (!(composed.stdout ?? '').includes('dsh-settings-roam')) {

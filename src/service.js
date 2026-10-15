@@ -102,13 +102,26 @@ export function createSyncService(config) {
    *   2. 只有一个 profile 时自动选它（绝大多数用户只有 web 一个）
    *   3. 多于一个且未指定时明确报错而不是猜——猜错会写坏另一个 profile
    */
-  const explicitProfile = config.profileName ?? null
-
-  /** 用户在设置页指定的导出目录；留空时用数据根目录下的默认位置。 */
-  const configuredExportRoot = config.exportRoot ?? null
-
-  /** 用户在设置页指定的导入目录（放导出包的地方）；留空时用默认位置。 */
-  const configuredImportRoot = config.importRoot ?? null
+  /**
+   * 读一个用户可改的选项。**必须在调用时读，不能在装配时读一次存起来。**
+   *
+   * 真装载里试出来的：DSH 改配置是**原地更新运行中的 config 对象**
+   * （config-editor 在写盘前就调 resolveConfig(fiber.runtime, resolved)），
+   * 插件不会被重新 apply。所以装配时捕获的常量永远停在旧值上——
+   * 表现为「设置页填了、显示已保存、重启才对」，而界面上一点报错都没有。
+   *
+   * 顺带兼容两种来源：配置文件里是 Volatile 引用（要 .get()），
+   * 命令行传进来的是普通字符串。
+   */
+  const liveOptions = config.options ?? config
+  const readOption = (key) => {
+    const field = liveOptions?.[key]
+    const value = typeof field?.get === 'function' ? field.get() : field
+    return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+  }
+  const explicitProfile = () => readOption('profileName')
+  const configuredExportRoot = () => readOption('exportRoot')
+  const configuredImportRoot = () => readOption('importRoot')
 
   /**
    * 默认导入目录。
@@ -118,7 +131,7 @@ export function createSyncService(config) {
    * 用户「在这台机器导出、换台机器导入」时不必先去想路径。
    */
   function defaultImportRoot() {
-    return configuredImportRoot ?? configuredExportRoot ?? join(dshRoot, 'settings-roam', 'export')
+    return configuredImportRoot() ?? configuredExportRoot() ?? join(dshRoot, 'settings-roam', 'export')
   }
 
   /**
@@ -165,7 +178,8 @@ export function createSyncService(config) {
 
   /** 解析出本次操作的目标 profile 名。 */
   function resolveProfileName() {
-    if (explicitProfile !== null) return explicitProfile
+    const explicit = explicitProfile()
+    if (explicit !== null) return explicit
     const names = listProfiles(dshRoot, { readdirSync, existsSync })
     if (names.length === 1) return names[0]
     if (names.length === 0) {
@@ -808,7 +822,7 @@ export function createSyncService(config) {
       try {
         return { name: resolveProfileName(), resolved: true, reason: null }
       } catch (error) {
-        return { name: explicitProfile, resolved: false, reason: String(error?.message ?? error) }
+        return { name: explicitProfile(), resolved: false, reason: String(error?.message ?? error) }
       }
     },
 
@@ -835,7 +849,7 @@ export function createSyncService(config) {
     defaultExportRoot() {
       // 用户在设置页填了导出目录就用它，否则落在数据根目录下。
       // 落在数据根目录下是刻意的：它天然属于这台机器，不会被误同步。
-      return configuredExportRoot ?? join(dshRoot, 'settings-roam', 'export')
+      return configuredExportRoot() ?? join(dshRoot, 'settings-roam', 'export')
     },
 
     /**

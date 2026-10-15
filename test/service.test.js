@@ -616,3 +616,42 @@ test('prepareImport 不给目录时走默认导入目录，而不是报「缺参
     error => !/packageDir/.test(String(error.message)),
   )
 })
+
+// ─── 配置必须现读，不能在装配时读一次存起来 ─────────────────────────────
+
+test('用户改了设置，服务必须立刻用上新值，不需要重启插件', () => {
+  // DSH 改配置是原地更新运行中的 config 对象（config-editor 写盘前就
+  // resolveConfig 了），插件不会被重新 apply。装配时把值拷成常量，
+  // 就会表现为「设置页填了、显示已保存、实际不生效」——界面上一点报错都没有，
+  // 只有真去用一次（比如填了导入目录再点导入）才看得出来。
+  let exportRoot = '/one'
+  let importRoot = '/two'
+  const service = createSyncService({
+    dshRoot: '/tmp/roam-live-root',
+    options: {
+      exportRoot: { get: () => exportRoot },
+      importRoot: { get: () => importRoot },
+      profileName: { get: () => '' },
+    },
+  })
+
+  assert.equal(service.defaultExportRoot(), '/one')
+  assert.equal(service.defaultImportRoot(), '/two')
+
+  exportRoot = '/three'
+  importRoot = '/four'
+
+  assert.equal(service.defaultExportRoot(), '/three', '改了导出目录必须立刻生效')
+  assert.equal(service.defaultImportRoot(), '/four', '改了导入目录必须立刻生效')
+})
+
+test('留空的选项回到默认位置，而不是变成空字符串', () => {
+  // 空字符串是「用户填了但填的是空白」，不是「没填」。混在一起会让
+  // 默认目录失效，进而让导入去找一个叫空串的目录。
+  const service = createSyncService({
+    dshRoot: '/tmp/roam-live-root',
+    options: { exportRoot: { get: () => '' }, importRoot: { get: () => '   ' } },
+  })
+  assert.equal(service.defaultExportRoot(), '/tmp/roam-live-root/settings-roam/export')
+  assert.equal(service.defaultImportRoot(), '/tmp/roam-live-root/settings-roam/export')
+})
