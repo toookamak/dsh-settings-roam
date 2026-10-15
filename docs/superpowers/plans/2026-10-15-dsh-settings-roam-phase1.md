@@ -632,7 +632,593 @@ git commit -m "方言通道：按条目切分、渲染、合并写回，落地 C
 
 ---
 
-（后续任务见下节，本文档按阶段增量补齐）
+## 二 · 读路径
+
+### Task 4: 插件名单读取与官方判定
+
+本任务落地设计 §2.6 的判定口径。**已核实的运行时事实**（2026-10-15，源码 `packages/boot/plugin-manager/src/index.ts`）：
+
+- `official = optional || offered !== undefined`（`:299`）——只覆盖官方可选包与按需包，**漏掉随安装带的包**
+- `availability = shipped ? 'installation' : 'profile'`（`:322`），`shipped = Object.hasOwn(installation.dependencies ?? {}, name)`（`:297`）
+- `owned = installed && !shipped`（`:313`），`source` 仅对 `owned` 的包写入（`:318`）——**随安装带的官方包不写 `source`**
+
+**Files:**
+- Create: `src/bundles.js`
+- Test: `test/bundles.test.js`
+
+- [ ] **Step 1: 写失败测试**
+
+创建 `test/bundles.test.js`：
+
+```js
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { isOfficialBundle, classifyBundles, readBundleNames } from '../src/bundles.js'
+
+test('判定口径：official 为真即官方', () => {
+  assert.equal(isOfficialBundle({ name: 'x', official: true, availability: 'profile' }), true)
+})
+
+test('判定口径：availability 为 installation 即官方（补 official 的缺口）', () => {
+  assert.equal(isOfficialBundle({ name: 'x', official: false, availability: 'installation' }), true)
+})
+
+test('判定口径：第三方包既非 official 也非 installation', () => {
+  assert.equal(isOfficialBundle({ name: 'dsh-soul', official: false, availability: 'profile' }), false)
+})
+
+test('判定口径：不用包名前缀判定', () => {
+  // 即便名字带官方前缀，只要两个字段都不满足，就不是官方
+  assert.equal(isOfficialBundle({ name: '@deepseek-ai/whatever', official: false, availability: 'profile' }), false)
+})
+
+test('分类：把 listBundles 结果分成官方与第三方两列', () => {
+  const rows = [
+    { name: '@deepseek-ai/dsh-base', official: false, availability: 'installation', enabled: true },
+    { name: '@deepseek-ai/dsh-experimental-ralph-bundle', official: true, availability: 'profile', enabled: false },
+    { name: 'dsh-soul', official: false, availability: 'profile', enabled: true },
+    { name: 'github:toookamak/dsh-git-sentry', official: false, availability: 'profile', enabled: true },
+  ]
+  const { official, thirdParty } = classifyBundles(rows)
+  assert.deepEqual(official.map(b => b.name).sort(), [
+    '@deepseek-ai/dsh-base',
+    '@deepseek-ai/dsh-experimental-ralph-bundle',
+  ])
+  assert.deepEqual(thirdParty.map(b => b.name).sort(), [
+    'dsh-soul',
+    'github:toookamak/dsh-git-sentry',
+  ])
+})
+
+test('插件名单只记名字，不记启用状态', () => {
+  const rows = [
+    { name: 'a', official: true, availability: 'profile', enabled: true },
+    { name: 'b', official: true, availability: 'profile', enabled: false },
+  ]
+  const names = readBundleNames(rows)
+  assert.deepEqual(names.official.sort(), ['a', 'b'])
+  assert.equal(JSON.stringify(names).includes('enabled'), false, '名字名单不应携带 enabled')
+})
+```
+
+- [ ] **Step 2: 运行测试，确认失败**
+
+运行：`node --test test/bundles.test.js`
+预期：FAIL，`Cannot find module '../src/bundles.js'`
+
+- [ ] **Step 3: 实现插件名单模块**
+
+创建 `src/bundles.js`：
+
+```js
+/**
+ * 插件名单的读取与官方/第三方判定。
+ *
+ * 判定口径（设计 §2.6，三条来源取并集）：
+ *   official === true || availability === 'installation'
+ *
+ * 为什么需要并集：源码 plugin-manager/src/index.ts:299 的 official 计算式
+ * `optional || offered !== undefined` 只覆盖官方可选包（OPTIONAL_BUNDLES，11 条）
+ * 与官方按需包（OFFICIAL_ON_DEMAND_CATALOG，2 条），漏掉了随 DSH 安装本体发布的
+ * 那批插件（shipped）。而 availability 恰好由 shipped 决定，补上这个缺口。
+ *
+ * 为什么不用包名前缀 @deepseek-ai/ 判定：前缀是 npm scope，不是所有权凭证。
+ * 实践中目前与官方判定等价，但会在「官方发布非该前缀首方包」或「用户从别的
+ * registry 装同名包」两种情况下失效。前缀只作界面上的可读辅助。
+ */
+
+/**
+ * 判定单个包是否官方。
+ * @param {{official?: boolean, availability?: string}} info - BundleInfo 的子集
+ * @returns {boolean}
+ */
+export function isOfficialBundle(info) {
+  return info?.official === true || info?.availability === 'installation'
+}
+
+/**
+ * 把 listBundles() 的结果分成官方与第三方两列。
+ * @param {object[]} rows - BundleInfo 数组
+ * @returns {{official: object[], thirdParty: object[]}}
+ */
+export function classifyBundles(rows) {
+  const official = []
+  const thirdParty = []
+  for (const row of rows) {
+    if (isOfficialBundle(row)) official.push(row)
+    else thirdParty.push(row)
+  }
+  return { official, thirdParty }
+}
+
+/**
+ * 从 BundleInfo 数组抽出只含名字的名单。
+ * 设计决策 8：插件只记名字，不记启用状态、不记插件内设置。
+ * 「已启用 bundle」名单是动态的（本机就有先后关闭的可选包），
+ * 所以每次推送都必须重新读取，不能当固定快照。
+ * @param {object[]} rows
+ * @returns {{official: string[], thirdParty: string[]}}
+ */
+export function readBundleNames(rows) {
+  const { official, thirdParty } = classifyBundles(rows)
+  return {
+    official: official.map(b => b.name),
+    thirdParty: thirdParty.map(b => b.name),
+  }
+}
+
+/**
+ * 从 ctx.pluginManager 读取插件名单。
+ * @param {object} pluginManager - ctx.pluginManager 服务
+ * @returns {Promise<{official: string[], thirdParty: string[], raw: object[]}>}
+ */
+export async function collectBundles(pluginManager) {
+  const raw = await pluginManager.listBundles()
+  const names = readBundleNames(raw)
+  return { ...names, raw }
+}
+```
+
+- [ ] **Step 4: 运行测试，确认通过**
+
+运行：`node --test test/bundles.test.js`
+预期：PASS，6 个测试通过
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add src/bundles.js test/bundles.test.js
+git commit -m "插件名单：官方判定口径落地为 official || availability === installation"
+```
+
+---
+
+### Task 5: 技能目录读写
+
+技能不是纯文本：含可执行脚本与二进制资源，**必须保留文件模式**（设计 §4.7）。丢失可执行位会让脚本在目标机器上静默失效——文件在，但跑不起来。
+
+**Files:**
+- Create: `src/skills.js`
+- Test: `test/skills.test.js`
+
+- [ ] **Step 1: 写失败测试**
+
+创建 `test/skills.test.js`：
+
+```js
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, statSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { scanSkills, copySkills, listSkillNames } from '../src/skills.js'
+
+function makeSkillDir() {
+  const root = mkdtempSync(join(tmpdir(), 'roam-skills-'))
+  const a = join(root, 'agent-browser')
+  mkdirSync(join(a, 'templates'), { recursive: true })
+  writeFileSync(join(a, 'SKILL.md'), '# agent-browser\n')
+  writeFileSync(join(a, 'templates', 'run.sh'), '#!/bin/sh\necho hi\n')
+  chmodSync(join(a, 'templates', 'run.sh'), 0o755)
+  const b = join(root, 'writing-plans')
+  mkdirSync(b, { recursive: true })
+  writeFileSync(join(b, 'SKILL.md'), '# writing-plans\n')
+  return root
+}
+
+test('扫描技能目录，列出技能名', () => {
+  const root = makeSkillDir()
+  const names = listSkillNames(root)
+  assert.deepEqual(names.sort(), ['agent-browser', 'writing-plans'])
+  rmSync(root, { recursive: true })
+})
+
+test('扫描记录每个文件的模式，尤其是可执行位', () => {
+  const root = makeSkillDir()
+  const scanned = scanSkills(root)
+  const sh = scanned.find(f => f.relPath === 'agent-browser/templates/run.sh')
+  assert.ok(sh, '应扫描到模板脚本')
+  assert.equal(sh.executable, true, '可执行位必须被记录')
+  const md = scanned.find(f => f.relPath === 'agent-browser/SKILL.md')
+  assert.equal(md.executable, false)
+  rmSync(root, { recursive: true })
+})
+
+test('复制技能保留可执行位', () => {
+  const root = makeSkillDir()
+  const dest = mkdtempSync(join(tmpdir(), 'roam-dest-'))
+  copySkills(root, ['agent-browser'], dest)
+  const copied = join(dest, 'agent-browser', 'templates', 'run.sh')
+  const mode = statSync(copied).mode & 0o777
+  assert.equal(mode & 0o100, 0o100, '复制后仍应可执行')
+  rmSync(root, { recursive: true })
+  rmSync(dest, { recursive: true })
+})
+
+test('技能含二进制资源时不破坏内容', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roam-bin-'))
+  const s = join(root, 'screenshot')
+  mkdirSync(join(s, 'assets'), { recursive: true })
+  const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe])
+  writeFileSync(join(s, 'assets', 'shot.png'), bytes)
+  const dest = mkdtempSync(join(tmpdir(), 'roam-dest2-'))
+  copySkills(root, ['screenshot'], dest)
+  const after = statSync(join(dest, 'screenshot', 'assets', 'shot.png'))
+  assert.equal(after.size, bytes.length, '二进制长度不变')
+  rmSync(root, { recursive: true })
+  rmSync(dest, { recursive: true })
+})
+```
+
+- [ ] **Step 2: 运行测试，确认失败**
+
+运行：`node --test test/skills.test.js`
+预期：FAIL，`Cannot find module '../src/skills.js'`
+
+- [ ] **Step 3: 实现技能模块**
+
+创建 `src/skills.js`：
+
+```js
+/**
+ * 技能目录的读写。
+ *
+ * 设计 §4.7 的两个硬要求：
+ *   1. 保留文件模式 —— 脚本靠可执行位工作，丢了就在目标机器上静默失效。
+ *   2. 同步前必须能审查脚本内容 —— 技能脚本会在目标机器上执行，
+ *      差异视图里要能看到脚本的新增与改动，不能当不透明二进制默默搬过去。
+ *
+ * 主通道是直读 ~/.dsh/skills/，ctx.skills 只作校验通道（设计决策 26）：
+ * 技能本体就是文件，直读得到的就是要同步的内容；走 ctx.skills 反而多一层抽象。
+ */
+
+import { readdirSync, statSync, mkdirSync, copyFileSync, chmodSync } from 'node:fs'
+import { join, relative, sep } from 'node:path'
+
+/**
+ * 列出技能目录下的技能名（各技能一个子目录）。
+ * @param {string} skillsRoot - 形如 ~/.dsh/skills
+ * @returns {string[]}
+ */
+export function listSkillNames(skillsRoot) {
+  let entries
+  try {
+    entries = readdirSync(skillsRoot, { withFileTypes: true })
+  } catch (error) {
+    if (error?.code === 'ENOENT') return []
+    throw error
+  }
+  return entries.filter(e => e.isDirectory()).map(e => e.name)
+}
+
+/**
+ * 递归扫描技能目录，返回每个文件的可比较记录。
+ * @param {string} skillsRoot
+ * @param {string[]} [only] - 只扫描这些技能；省略则全部
+ * @returns {{relPath: string, size: number, executable: boolean}[]}
+ */
+export function scanSkills(skillsRoot, only) {
+  const wanted = only ?? listSkillNames(skillsRoot)
+  const out = []
+  const walk = (dir, relBase) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const abs = join(dir, entry.name)
+      const rel = relBase === '' ? entry.name : `${relBase}/${entry.name}`
+      if (entry.isDirectory()) {
+        walk(abs, rel)
+        continue
+      }
+      if (!entry.isFile()) continue
+      const st = statSync(abs)
+      out.push({
+        relPath: rel.split(sep).join('/'),
+        size: st.size,
+        executable: (st.mode & 0o100) !== 0,
+      })
+    }
+  }
+  for (const name of wanted) {
+    const abs = join(skillsRoot, name)
+    try {
+      if (!statSync(abs).isDirectory()) continue
+    } catch {
+      continue
+    }
+    walk(abs, name)
+  }
+  return out.sort((a, b) => a.relPath.localeCompare(b.relPath))
+}
+
+/**
+ * 把指定技能复制到目标目录，保留可执行位。
+ * @param {string} skillsRoot - 源技能根目录
+ * @param {string[]} names - 要复制的技能名
+ * @param {string} destRoot - 目标根目录（技能会成为其子目录）
+ * @returns {string[]} 实际复制的技能名
+ */
+export function copySkills(skillsRoot, names, destRoot) {
+  const copied = []
+  for (const name of names) {
+    const src = join(skillsRoot, name)
+    let st
+    try {
+      st = statSync(src)
+    } catch {
+      continue
+    }
+    if (!st.isDirectory()) continue
+    const walk = (dir, relBase) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const abs = join(dir, entry.name)
+        const rel = relBase === '' ? entry.name : `${relBase}/${entry.name}`
+        const dest = join(destRoot, name, rel)
+        if (entry.isDirectory()) {
+          mkdirSync(dest, { recursive: true })
+          walk(abs, rel)
+          continue
+        }
+        if (!entry.isFile()) continue
+        mkdirSync(join(dest, '..'), { recursive: true })
+        copyFileSync(abs, dest)
+        // 保留模式位：脚本靠可执行位工作
+        const mode = statSync(abs).mode & 0o777
+        chmodSync(dest, mode)
+      }
+    }
+    mkdirSync(join(destRoot, name), { recursive: true })
+    walk(src, '')
+    copied.push(name)
+  }
+  return copied
+}
+
+/**
+ * 用 ctx.skills 校验直读结果（校验通道）。
+ * 不一致说明有技能来自非本机的 provider 来源，这本身值得报告。
+ * @param {object} skillService - ctx.skills
+ * @param {string[]} directNames - 直读得到的技能名
+ * @returns {Promise<{consistent: boolean, complete: boolean, serviceNames: string[]}>}
+ */
+export async function crossCheckSkills(skillService, directNames) {
+  const snap = await skillService.snapshot()
+  const serviceNames = snap.skills.map(s => s.name)
+  const a = [...directNames].sort()
+  const b = [...serviceNames].sort()
+  return {
+    consistent: JSON.stringify(a) === JSON.stringify(b),
+    complete: snap.complete !== false,
+    serviceNames,
+  }
+}
+```
+
+- [ ] **Step 4: 运行测试，确认通过**
+
+运行：`node --test test/skills.test.js`
+预期：PASS，4 个测试通过
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add src/skills.js test/skills.test.js
+git commit -m "技能：直读为主通道，保留可执行位，ctx.skills 作交叉校验"
+```
+
+---
+
+### Task 6: 抽取器（读路径核心）
+
+本任务是设计的核心动作：**公共线不是「复制文件」，而是「按归属表从文件里抽取公共项」**（设计 §3.2）。
+
+**Files:**
+- Create: `src/extract.js`
+- Test: `test/extract.test.js`
+
+- [ ] **Step 1: 写失败测试**
+
+创建 `test/extract.test.js`：
+
+```js
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { extractShared, detectUnexpectable } from '../src/extract.js'
+import { parsePatchList } from '../src/yaml-loader.js'
+
+const PATCH = [
+  "# LAN bind: 首行注释",
+  '- id: webserver',
+  '  config:',
+  "    host: '192.168.31.7'",
+  '    port: 3080',
+  '- id: llm-pi-ai',
+  '  name: "@deepseek-ai/dsh-llm-pi-ai"',
+  '  config:',
+  '    providers:',
+  '      demo:',
+  '        apiKeyEnv: DEMO_KEY',
+  '        baseURL: https://example.invalid/v1',
+  '- id: ui-theme',
+  '  config:',
+  '    preference: dark',
+  '',
+].join('\n')
+
+test('抽取只保留公共条目，本机条目一概不进', () => {
+  const rows = parsePatchList(PATCH)
+  const { patch } = extractShared({ patchRows: rows })
+  assert.deepEqual(patch.map(r => r.id), ['llm-pi-ai'])
+})
+
+test('抽取结果里不含本机专属取值（局域网 IP 绝不出现）', () => {
+  const rows = parsePatchList(PATCH)
+  const { patch } = extractShared({ patchRows: rows })
+  const text = JSON.stringify(patch)
+  assert.equal(text.includes('192.168.31.7'), false, '局域网 IP 不得进公共线')
+  assert.equal(text.includes('ui-theme'), false, '主题属本机，不得进公共线')
+  assert.equal(text.includes('preference'), false)
+})
+
+test('抽取保留 apiKeyEnv 引用名，但不含密钥值', () => {
+  const rows = parsePatchList(PATCH)
+  const { patch } = extractShared({ patchRows: rows })
+  const providers = patch[0].config.providers
+  assert.equal(providers.demo.apiKeyEnv, 'DEMO_KEY', '引用名要同步')
+  assert.equal(JSON.stringify(patch).includes('sk-'), false, '不得出现密钥形态的串')
+})
+
+test('抽取报告逐项的归属，便于界面展示', () => {
+  const rows = parsePatchList(PATCH)
+  const { entries } = extractShared({ patchRows: rows })
+  const byPath = Object.fromEntries(entries.map(e => [e.path, e.ownership]))
+  assert.equal(byPath['patch:llm-pi-ai'], 'shared')
+  assert.equal(byPath['patch:webserver'], 'machine')
+  assert.equal(byPath['patch:ui-theme'], 'machine')
+})
+
+test('识别 patch 里第三方插件留下的 insert 行', () => {
+  const rows = parsePatchList([
+    '- id: some-third-party',
+    '  insert:',
+    '    - id: injected-by-plugin',
+    '      name: some-pkg',
+    '',
+  ].join('\n'))
+  const found = detectUnexpectable(rows)
+  assert.deepEqual(found.map(f => f.id), ['some-third-party'])
+  assert.equal(found[0].reason, 'has-insert-rows')
+})
+
+test('insert 行不作为配置项抽取（否则会写坏别的机器的加载顺序）', () => {
+  const rows = parsePatchList([
+    '- id: llm-pi-ai',
+    '  config:',
+    '    providers: {}',
+    '- id: some-third-party',
+    '  insert:',
+    '    - id: injected-by-plugin',
+    '',
+  ].join('\n'))
+  const { patch, unexpectable } = extractShared({ patchRows: rows })
+  assert.deepEqual(patch.map(r => r.id), ['llm-pi-ai'])
+  assert.equal(unexpectable.length, 1, 'insert 行应被识别并排除')
+})
+```
+
+- [ ] **Step 2: 运行测试，确认失败**
+
+运行：`node --test test/extract.test.js`
+预期：FAIL，`Cannot find module '../src/extract.js'`
+
+- [ ] **Step 3: 实现抽取器**
+
+创建 `src/extract.js`：
+
+```js
+/**
+ * 推送侧抽取：按归属表从本机配置里抽出公共线。
+ *
+ * 这是本设计的核心动作。实测数据显示 cordis.patch.yml 有 9 个顶层条目，
+ * 其中只有 llm-pi-ai 一个进公共线。所以抽取的最小单位是【顶层条目】，
+ * 不是整个文件——按文件整体同步会把 webserver.host 的局域网 IP 带到新机器上，
+ * 恰好犯下本项目要解决的那个错误。
+ *
+ * 风险评估（设计 §7.3 最后一行）：第三方插件会在 patch 里留下 insert 行。
+ * 若误把 insert 行当配置项抽取，会写坏别的机器的加载顺序。所以这里显式识别并排除。
+ */
+
+import { ownershipOf, OWNERSHIP } from './ownership.js'
+import { splitByTopLevelId } from './yaml-loader.js'
+
+/**
+ * 识别 patch 里不该被抽取的条目。
+ * @param {object[]} rows
+ * @returns {{id: string, reason: string}[]}
+ */
+export function detectUnexpectable(rows) {
+  const found = []
+  for (const row of rows) {
+    if (row?.insert !== undefined) {
+      found.push({ id: row.id, reason: 'has-insert-rows' })
+    }
+  }
+  return found
+}
+
+/**
+ * 从本机配置抽取公共线。
+ *
+ * @param {{patchRows?: object[]}} input - 本机 cordis.patch.yml 解析后的条目
+ * @returns {{
+ *   patch: object[],           // 要写进云端的公共条目
+ *   entries: {path: string, kind: string, ownership: string}[],  // 逐项归属，供界面展示
+ *   unexpectable: {id: string, reason: string}[],                // 被识别并排除的条目
+ * }}
+ */
+export function extractShared(input) {
+  const patchRows = input.patchRows ?? []
+  const { shared, machine, excluded } = splitByTopLevelId(patchRows)
+  const unexpectable = detectUnexpectable(patchRows)
+  const unexpectableIds = new Set(unexpectable.map(u => u.id))
+
+  const entries = []
+  for (const row of patchRows) {
+    entries.push({
+      path: `patch:${row.id}`,
+      kind: 'patch',
+      ownership: ownershipOf('patch', row.id),
+    })
+  }
+
+  // 只有确认属于公共线、且不是 insert 痕迹的条目才真正抽取
+  const patch = shared.filter(row => !unexpectableIds.has(row.id))
+
+  return { patch, entries, unexpectable }
+}
+
+/**
+ * 判断一次抽取是否“干净”：有没有本该进公共线却被排除的条目。
+ * 供界面在推送前提示用户。
+ * @param {{patch: object[], unexpectable: object[]}} result
+ * @returns {boolean}
+ */
+export function isExtractionClean(result) {
+  return result.unexpectable.length === 0
+}
+```
+
+- [ ] **Step 4: 运行测试，确认通过**
+
+运行：`node --test test/extract.test.js`
+预期：PASS，6 个测试通过
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add src/extract.js test/extract.test.js
+git commit -m "抽取器：按顶层条目抽取公共线，识别并排除 insert 痕迹"
+```
+
+---
 
 ## 验证结论存档
 
