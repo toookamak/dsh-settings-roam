@@ -34,6 +34,34 @@ window.__ModuleLoader__.load({
     const NS = '@toookamak/dsh-settings-roam'
 
     /**
+     * 本插件的语言包。
+     *
+     * 为什么内联而不是读 locale/*.json：这个文件是 lazy-CJS bundle，
+     * 注入进来的 require 只解析裸说明符（loader 的模块表），没有文件系统，
+     * 也没有打包器帮我们把 JSON 合进来。locale/*.json 留给宿主侧的
+     * 插件清单使用（packages/host/plugin-inventory 就是从那里读
+     * meta.title／meta.description 的），两边内容由测试锁住一致性。
+     */
+    const LOCALES = {
+      zh: {
+        meta: {
+          title: '设置漫游',
+          description: '把可移植的配置推到云端，在新机器上拉回来。',
+        },
+        nav: '设置漫游',
+        section: { pull: '拉取', push: '推送' },
+      },
+      en: {
+        meta: {
+          title: 'Settings Roam',
+          description: 'Push portable settings to the cloud, pull them back on a new machine.',
+        },
+        nav: 'Settings Roam',
+        section: { pull: 'Pull', push: 'Push' },
+      },
+    }
+
+    /**
      * 路由路径。必须与宿主半侧 src/routes.js 的 ROUTES 保持一致——
      * 这里不能 import 它（一个是浏览器 bundle、一个是宿主模块），
      * 所以只能各写一份，改动时两边一起改。
@@ -315,25 +343,46 @@ window.__ModuleLoader__.load({
       return h(Section, { state, actions })
     }
 
-    /** 本插件的客户端依赖：无（只用 React 与 fetch）。 */
-    function inject() {
-      return []
-    }
+    /**
+     * 本插件的客户端依赖。
+     *
+     * 必须是**字符串数组**而不是函数——这是实测纠正过来的一处错：
+     * 官方的 `exports.inject` 一律是数组
+     * （packages/client/ui-settings-plugins/src/client/index.ts:28
+     * `export const inject = ['slots', 'locale']`），
+     * 它声明的是「这个插件要用到哪些客户端服务」，由客户端注入器在挂载前解析。
+     * 写成函数的话注入器拿不到依赖声明，还没等到 apply 被调用就已经出问题了。
+     *
+     * slots：注册设置分区要用；locale：语言包要用。
+     * 只用得上这两个，多声明一个都会变成「官方一改名就装不上」的额外风险。
+     */
+    const inject = ['slots', 'locale']
 
     /**
      * 挂到设置分区的「设置漫游」一节。
      * @param {object} ctx - 客户端上下文
      */
     function apply(ctx) {
+      // 语言包必须先登记，否则 label() 查的是一个不存在的命名空间，
+      // 整节的标题会退化成键名。官方写法同此
+      // （packages/client/ui-settings-plugins/src/client/index.ts:36-37）。
+      //
+      // locale 是 inject 声明过的依赖，正常情况下一定在；这里仍留一条兜底，
+      // 因为语言服务缺席的后果（整节不显示）远重于文案退回中文。
+      const t = ctx.locale?.bind?.(NS)
+      if (t) {
+        ctx.effect(() => ctx.locale.register(NS, LOCALES), 'dsh-settings-roam: section dictionaries')
+      }
+
       ctx.slots.inject('settings.section', () => ctx.slots.register({
         name: 'settings.section',
         id: 'settings-roam',
         order: 50,
-        // 标签走宿主语言包；取不到时退回中文字面量，
-        // 免得因为语言服务还没就绪而整节不显示。
+        // 标签走语言包；万一语言服务还没就绪则退回中文字面量，
+        // 免得因为一个标题取不到就整节不显示。
         label: () => {
           try {
-            return ctx.locale?.bind?.(NS)?.('nav') ?? '设置漫游'
+            return t?.('nav') ?? '设置漫游'
           } catch {
             return '设置漫游'
           }
@@ -343,6 +392,6 @@ window.__ModuleLoader__.load({
       }, SectionContainer))
     }
 
-    return { apply, inject, Section, StatusLine, Overview, SectionContainer }
+    return { apply, inject, Section, StatusLine, Overview, SectionContainer, LOCALES }
   },
 })

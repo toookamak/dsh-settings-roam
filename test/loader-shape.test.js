@@ -448,38 +448,76 @@ async function loadClient(tag) {
 test('客户端导出 apply 与 inject —— 否则界面一片空白且不报错', async () => {
   const exported = await loadClient('mount')
   assert.equal(typeof exported.apply, 'function', '必须导出 apply，否则没有东西会挂载它')
-  assert.equal(typeof exported.inject, 'function', '必须导出 inject')
+  assert.ok(Array.isArray(exported.inject), '必须导出 inject')
 })
 
-test('客户端不声明用不上的依赖', async () => {
+test('inject 是字符串数组，不是函数 —— 这是实测纠正过来的一处错', async () => {
   const exported = await loadClient('deps')
-  // 声明了不用的依赖，宿主改名时本插件会连带拒绝启动 —— 白白多一处失效点。
-  assert.deepEqual(exported.inject(), [], '本插件只用 React 与 fetch，无需额外依赖')
+  // 官方的 exports.inject 一律是数组
+  // （packages/client/ui-settings-plugins/src/client/index.ts:28
+  //  `export const inject = ['slots', 'locale']`），它声明的是「要用到哪些
+  // 客户端服务」。写成函数的话注入器读不到依赖声明。
+  assert.ok(Array.isArray(exported.inject), 'inject 必须是数组')
+  assert.deepEqual(
+    [...exported.inject].sort(),
+    ['locale', 'slots'],
+    '只声明真正用到的两个服务 —— 多声明一个就多一处「官方改名就装不上」的风险',
+  )
 })
 
-test('apply 经 slots.inject 注册到 settings.section 槽位', async () => {
-  const exported = await loadClient('slot')
+test('声明了的客户端服务必须真的被用到 —— inject 不能有名无实', async () => {
+  const src = read('client.js')
+  for (const service of ['slots', 'locale']) {
+    assert.ok(
+      src.includes(`ctx.${service}`),
+      `inject 声明了 ${service}，但源码里没有用到它`,
+    )
+  }
+})
 
+/**
+ * 造一个客户端上下文。
+ *
+ * 与宿主半侧 test/apply-host.test.js 同一个理由：真客户端上下文也是
+ * 「没 inject 过就不给读」，这里只提供被声明过的那几个服务，
+ * 顺手把 effect 收下来，好断言「语言包是在 effect 里登记的」。
+ * @param {object} [overrides]
+ */
+function clientCtx(overrides = {}) {
   const registered = []
-  let injectedSlot = null
+  const effects = []
+  const dictionaries = []
   const ctx = {
+    registered,
+    effects,
+    dictionaries,
     slots: {
-      inject: (name, fn) => {
-        injectedSlot = name
-        fn()
-      },
+      inject: (name, fn) => { ctx.injectedSlot = name; fn() },
       register: (spec, component) => {
         registered.push({ spec, component })
         return () => {}
       },
     },
+    // locale 是声明过的依赖，按 Cordis 的语义它一定存在
+    locale: {
+      bind: () => (key) => (key === 'nav' ? '设置漫游（译）' : key),
+      register: (ns, dicts) => { dictionaries.push({ ns, dicts }); return () => {} },
+    },
+    effect: (fn, label) => { effects.push({ fn, label }); return () => {} },
+    ...overrides,
   }
+  return ctx
+}
 
+test('apply 经 slots.inject 注册到 settings.section 槽位', async () => {
+  const exported = await loadClient('slot')
+
+  const ctx = clientCtx()
   exported.apply(ctx)
 
-  assert.equal(injectedSlot, 'settings.section', '槽位名必须是字符串 settings.section')
-  assert.equal(registered.length, 1, '只贡献一节，不占别处（界面决策 U2）')
-  const { spec, component } = registered[0]
+  assert.equal(ctx.injectedSlot, 'settings.section', '槽位名必须是字符串 settings.section')
+  assert.equal(ctx.registered.length, 1, '只贡献一节，不占别处（界面决策 U2）')
+  const { spec, component } = ctx.registered[0]
   assert.equal(spec.name, 'settings.section', '注册 spec 里的 name 也要是这个字符串')
   assert.equal(spec.id, 'settings-roam', 'id 用于去重与卸载')
   assert.equal(typeof spec.label, 'function', '分区标签必须是函数（延迟取语言包）')
@@ -487,34 +525,55 @@ test('apply 经 slots.inject 注册到 settings.section 槽位', async () => {
   assert.equal(typeof component, 'function', '挂载的必须是组件')
 })
 
-test('apply 在语言服务缺席时仍能给出标签 —— 不因取不到翻译就整节不显示', async () => {
-  const exported = await loadClient('label')
-  const registered = []
-  // 刻意不给 ctx.locale：命令行/早期启动阶段它可能还没就绪
-  const ctx = {
-    slots: {
-      inject: (name, fn) => fn(),
-      register: (spec, component) => registered.push({ spec, component }),
-    },
-  }
+test('apply 在 effect 里登记语言包 —— 不登记的话 label 查的是不存在的命名空间', async () => {
+  const exported = await loadClient('locale-reg')
+  const ctx = clientCtx()
   exported.apply(ctx)
-  const label = registered[0].spec.label()
+
+  assert.equal(ctx.effects.length, 1, '语言包登记必须挂 effect，随插件卸载一起清理')
+  assert.equal(ctx.effects[0].label, 'dsh-settings-roam: section dictionaries')
+
+  // effect 在真上下文里由 Cordis 执行；这里手动跑一遍看登记了什么
+  ctx.effects[0].fn()
+  assert.equal(ctx.dictionaries.length, 1)
+  assert.equal(ctx.dictionaries[0].ns, '@toookamak/dsh-settings-roam')
+  assert.deepEqual(Object.keys(ctx.dictionaries[0].dicts).sort(), ['en', 'zh'])
+})
+
+test('语言包与 locale/*.json 内容一致 —— 内联是为了 bundle，不能各写各的', async () => {
+  const exported = await loadClient('locale-sync')
+  for (const lang of ['zh', 'en']) {
+    const onDisk = JSON.parse(read(`locale/${lang}.json`))
+    assert.deepEqual(
+      exported.LOCALES[lang], onDisk,
+      `client.js 内联的 ${lang} 与 locale/${lang}.json 不一致；` +
+      '前者给浏览器半侧用，后者给宿主侧的插件清单读 meta.title／meta.description',
+    )
+  }
+})
+
+test('语言包登记失败时标签仍有兜底 —— 不因取不到翻译就整节不显示', async () => {
+  const exported = await loadClient('label')
+  // 语言服务在（声明过就一定在），但按键取不到值：字典还没登记完就会这样
+  const ctx = clientCtx({ locale: { bind: () => () => undefined, register: () => () => {} } })
+  exported.apply(ctx)
+  const label = ctx.registered[0].spec.label()
   assert.equal(typeof label, 'string')
   assert.ok(label.length > 0, '标签必须有兜底文案')
 })
 
+test('语言服务整个缺席时也不得崩 —— 兜底路径要能独立成立', async () => {
+  const exported = await loadClient('label-nolocale')
+  const ctx = clientCtx({ locale: undefined })
+  assert.doesNotThrow(() => exported.apply(ctx), '取不到翻译不该让整节挂掉')
+  assert.equal(ctx.registered[0].spec.label(), '设置漫游')
+})
+
 test('apply 注册的标签优先取语言包', async () => {
   const exported = await loadClient('label2')
-  const registered = []
-  const ctx = {
-    slots: {
-      inject: (name, fn) => fn(),
-      register: (spec, component) => registered.push({ spec, component }),
-    },
-    locale: { bind: () => (key) => (key === 'nav' ? '设置漫游（译）' : key) },
-  }
+  const ctx = clientCtx()
   exported.apply(ctx)
-  assert.equal(registered[0].spec.label(), '设置漫游（译）')
+  assert.equal(ctx.registered[0].spec.label(), '设置漫游（译）')
 })
 
 // ─── U1：推送前必须先确认 ────────────────────────────────────────────
