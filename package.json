@@ -4,6 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "main": "index.js",
+  "bin": {
+    "dsh-settings-roam": "./bin/roam.js"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -17,6 +20,7 @@
     "cordis.patch.yml",
     "icon.svg",
     "src",
+    "bin",
     "locale"
   ],
   "dsh": {

@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, existsSync } from 'node:fs'
 import {
   DSH_HOME_ENV,
   defaultDshHome,
@@ -88,4 +89,43 @@ test('与官方包在真实环境下给出同一个结果（一致性锚点）',
     official.resolveDshHome(undefined, { DSH_HOME: '  ' }),
     '空白分支必须与官方一致',
   )
+})
+
+// ─── profile 路径解析 ──────────────────────────────────────────────
+// 对照 packages/boot/app-boot/src/profile.ts:37 PROFILES_DIR = 'profiles'
+// 与 :40 PROFILE_PATCH_FILENAME = 'cordis.patch.yml'，patch 位于
+// join(home, PROFILES_DIR) 之下的每个 profile 目录内（:276、:452）。
+
+test('profilePatchPath 拼出官方布局的路径', async () => {
+  const { profilePatchPath, PROFILES_DIR, PROFILE_PATCH_FILENAME } =
+    await import('../src/home-paths.js')
+
+  assert.equal(PROFILES_DIR, 'profiles')
+  assert.equal(PROFILE_PATCH_FILENAME, 'cordis.patch.yml')
+  assert.equal(
+    profilePatchPath('/home/u/.dsh', 'web'),
+    join('/home/u/.dsh', 'profiles', 'web', 'cordis.patch.yml'),
+  )
+})
+
+test('listProfiles 只列目录，不列文件，且结果稳定有序', async () => {
+  const { listProfiles } = await import('../src/home-paths.js')
+  const root = mkdtempSync(join(tmpdir(), 'roam-prof-'))
+  mkdirSync(join(root, 'profiles', 'web'), { recursive: true })
+  mkdirSync(join(root, 'profiles', 'desktop'), { recursive: true })
+  mkdirSync(join(root, 'profiles', 'alpha'), { recursive: true })
+  writeFileSync(join(root, 'profiles', 'README.md'), 'x')
+
+  const names = listProfiles(root, { readdirSync, existsSync })
+  assert.deepEqual(names, ['alpha', 'desktop', 'web'], '按字典序，结果可断言')
+  rmSync(root, { recursive: true })
+})
+
+test('没有 profiles 目录时返回空数组，不抛错', async () => {
+  const { listProfiles } = await import('../src/home-paths.js')
+  const root = mkdtempSync(join(tmpdir(), 'roam-prof2-'))
+
+  assert.deepEqual(listProfiles(root, { readdirSync, existsSync }), [])
+  assert.deepEqual(listProfiles(join(root, 'nonexistent'), { readdirSync, existsSync }), [])
+  rmSync(root, { recursive: true })
 })

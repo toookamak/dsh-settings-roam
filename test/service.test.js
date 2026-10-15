@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { createSyncService } from '../src/service.js'
 import { parsePatchList } from '../src/yaml-loader.js'
 
@@ -37,11 +37,18 @@ function sandbox() {
   const root = mkdtempSync(join(tmpdir(), 'roam-svc-'))
   const dshRoot = join(root, '.dsh')
   mkdirSync(dshRoot, { recursive: true })
-  writeFileSync(join(dshRoot, 'cordis.patch.yml'), PATCH)
+  // 真实布局：配置在 profiles/<名>/ 下，不在数据根目录下。
+  // fixture 必须与真实布局同构，否则「读取路径写错」这类缺陷照不出来——
+  // 这正是本轮修掉的一处真实缺陷：原先两边都建在根目录，152 个用例全绿，
+  // 而工具对真实数据根只能读到 0 个条目。
+  const profileName = 'web'
+  const patchFile = join(dshRoot, 'profiles', profileName, 'cordis.patch.yml')
+  mkdirSync(dirname(patchFile), { recursive: true })
+  writeFileSync(patchFile, PATCH)
   const skillsRoot = join(dshRoot, 'skills')
   mkdirSync(join(skillsRoot, 'demo'), { recursive: true })
   writeFileSync(join(skillsRoot, 'demo', 'SKILL.md'), '# demo\n')
-  return { root, dshRoot, skillsRoot, workDir: join(root, 'cloud') }
+  return { root, dshRoot, skillsRoot, patchFile, profileName, workDir: join(root, 'cloud') }
 }
 
 test('preparePush 组装出云端结构，且不含本机项', async () => {
@@ -103,9 +110,9 @@ test('preparePull 给出与本机的差异，且不修改本机文件', async ()
   })
   const service = createSyncService({ backend: remote, workDir, dshRoot, skillsRoot })
 
-  const before = readFileSync(join(dshRoot, 'cordis.patch.yml'), 'utf8')
+  const before = readFileSync(join(dshRoot, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
   const plan = await service.preparePull()
-  const after = readFileSync(join(dshRoot, 'cordis.patch.yml'), 'utf8')
+  const after = readFileSync(join(dshRoot, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
 
   assert.equal(after, before, 'preparePull 绝不能改本机文件')
   assert.ok(plan.diff.length >= 1, '应给出差异')
@@ -129,7 +136,7 @@ test('applyPull 应用配置并出报告，本机值零损伤', async () => {
   const plan = await service.preparePull()
   const report = await service.applyPull(plan, { backupRoot: join(root, 'backup') })
 
-  const after = parsePatchList(readFileSync(join(dshRoot, 'cordis.patch.yml'), 'utf8'))
+  const after = parsePatchList(readFileSync(join(dshRoot, 'profiles', 'web', 'cordis.patch.yml'), 'utf8'))
   assert.equal(after.find(r => r.id === 'webserver').config.host, '10.0.0.9', '本机值不得被改')
   assert.ok(after.find(r => r.id === 'llm-pi-ai').config.providers.x, '公共条目应已应用')
   assert.ok(report.backupPath, '报告应含备份位置')
@@ -137,7 +144,7 @@ test('applyPull 应用配置并出报告，本机值零损伤', async () => {
   // 用户照着这个路径找不到副本。它必须是真正装着副本的那一层。
   assert.notEqual(report.backupPath, join(root, 'backup'), '不能返回备份根目录而非备份本身')
   assert.ok(
-    existsSync(join(report.backupPath, join(dshRoot, 'cordis.patch.yml'))),
+    existsSync(join(report.backupPath, join(dshRoot, 'profiles', 'web', 'cordis.patch.yml'))),
     '报告给出的备份路径里应当真的找得到副本',
   )
   rmSync(root, { recursive: true })
@@ -482,5 +489,75 @@ test('导出的公共配置与本机项隔离 —— 局域网地址不落进导
 
   assert.ok(patchText.includes('llm-pi-ai'), '公共条目应被带走')
   assert.ok(!patchText.includes('10.0.0.9'), '本机监听地址绝不能出现在导出里')
+  rmSync(root, { recursive: true })
+})
+
+// ─── profile 解析（本轮修掉的一处真实缺陷）────────────────────────────
+// 缺陷：原实现假设配置在 <dshRoot>/cordis.patch.yml，
+// 而 DSH 的真实布局是 <dshRoot>/profiles/<名>/cordis.patch.yml。
+// 后果：对真实数据根运行 inspect 读到 0 个条目——用户明明配了东西，工具说没有。
+// 教训：fixture 与真实布局不同构时，测试再绿也不代表能用。
+
+test('按真实布局从 profiles/<名>/ 读配置，而不是数据根目录', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({ backend: fakeBackend(), workDir, dshRoot, skillsRoot })
+
+  const info = await service.prepareInspect()
+
+  assert.ok(info.patchExists, '应找到 profile 下的配置文件')
+  assert.equal(info.shared.length, 1, '应读到 1 个公共条目')
+  assert.equal(info.shared[0].id, 'llm-pi-ai')
+  assert.ok(info.patchFile.includes('profiles'), '路径应含 profiles 段')
+  rmSync(root, { recursive: true })
+})
+
+test('只有一个 profile 时自动选它 —— 用户不必知道配置在哪个 profile 里', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({ backend: fakeBackend(), workDir, dshRoot, skillsRoot })
+
+  const info = await service.prepareInspect()
+  assert.equal(info.shared.length, 1, '未显式指定也能读到')
+  rmSync(root, { recursive: true })
+})
+
+test('存在多个 profile 且未指定时报错，不擅自猜一个', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  // 再建一个 profile，模拟同时存在 web 与 desktop
+  const other = join(dshRoot, 'profiles', 'desktop')
+  mkdirSync(other, { recursive: true })
+  writeFileSync(join(other, 'cordis.patch.yml'), PATCH)
+  const service = createSyncService({ backend: fakeBackend(), workDir, dshRoot, skillsRoot })
+
+  await assert.rejects(
+    () => service.prepareInspect(),
+    /发现多个 profile/,
+    '猜错会写坏另一个 profile 的配置，必须报错让用户指定',
+  )
+  rmSync(root, { recursive: true })
+})
+
+test('显式指定 profileName 时按指定的读，不受其它 profile 干扰', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const other = join(dshRoot, 'profiles', 'desktop')
+  mkdirSync(other, { recursive: true })
+  writeFileSync(join(other, 'cordis.patch.yml'), '- id: something-else\n  config: {}\n')
+
+  const service = createSyncService({
+    backend: fakeBackend(), workDir, dshRoot, skillsRoot, profileName: 'desktop',
+  })
+  const info = await service.prepareInspect()
+
+  assert.equal(info.shared.length + info.machine.length + info.excludedIds.length, 1)
+  assert.ok(!info.shared.some(r => r.id === 'llm-pi-ai'), '不该读到 web 那个 profile 的条目')
+  rmSync(root, { recursive: true })
+})
+
+test('一个 profile 都没有时给出可行动的说明', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'roam-svc-empty-'))
+  const dshRoot = join(root, '.dsh')
+  mkdirSync(dshRoot, { recursive: true })
+  const service = createSyncService({ backend: fakeBackend(), dshRoot })
+
+  await assert.rejects(() => service.prepareInspect(), /没有在 .*找到任何 profile/)
   rmSync(root, { recursive: true })
 })

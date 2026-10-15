@@ -71,3 +71,64 @@ export function resolveDshHome(configured, env = process.env) {
 export function dshHomePath(...segments) {
   return join(resolveDshHome(), ...segments)
 }
+
+/**
+ * profiles 子目录名。
+ * 对照 packages/boot/app-boot/src/profile.ts:37 `export const PROFILES_DIR = 'profiles'`。
+ */
+export const PROFILES_DIR = 'profiles'
+
+/**
+ * profile 的 patch 文件名。
+ * 对照 packages/boot/app-boot/src/profile.ts:40
+ * `export const PROFILE_PATCH_FILENAME = 'cordis.patch.yml'`。
+ */
+export const PROFILE_PATCH_FILENAME = 'cordis.patch.yml'
+
+/**
+ * 解析某个 profile 的 patch 文件绝对路径。
+ *
+ * 为什么要单独抽出来（这是一处真实缺陷的修复）
+ * ────────────────────────────────────────
+ * 原实现写的是 `join(dshRoot, 'cordis.patch.yml')`，即数据根目录下直接找。
+ * 但 DSH 的真实布局是 `<dshRoot>/profiles/<profileName>/cordis.patch.yml`
+ * （见 packages/boot/app-boot/src/profile.ts:276 与 :452 的 profilesDir = join(home, PROFILES_DIR)）。
+ * 后果：对真实数据根运行 inspect 时读到 0 个条目——用户明明配了东西，
+ * 工具却说「什么都没有」。而单元测试因为把 fixture 也建在根目录下，
+ * 全部通过，照不出这个偏差。
+ *
+ * 这不只是「路径写错」：它属于「插件对 DSH 的数据布局做了假设」这一类问题。
+ * 凡是这类假设都必须在真实布局上验证过，否则测试再绿也不代表能用。
+ *
+ * @param {string} dshRoot - 已解析的数据根目录
+ * @param {string} profileName - profile 名，如 'web'
+ * @returns {string}
+ */
+export function profilePatchPath(dshRoot, profileName) {
+  return join(dshRoot, PROFILES_DIR, profileName, PROFILE_PATCH_FILENAME)
+}
+
+/**
+ * 列出现有的 profile 名。
+ *
+ * 用于在没有显式指定 profile 时自动选择——用户不该被要求先知道
+ * 「我的配置在哪个 profile 里」，那是 DSH 的内部组织方式。
+ *
+ * @param {string} dshRoot
+ * @param {{readdirSync: Function, existsSync: Function}} fsLike - 便于测试注入
+ * @returns {string[]} 按字典序，保证结果稳定可断言
+ */
+export function listProfiles(dshRoot, fsLike = {}) {
+  const { readdirSync, existsSync } = fsLike
+  const dir = join(dshRoot, PROFILES_DIR)
+  if (typeof existsSync !== 'function' || !existsSync(dir)) return []
+  if (typeof readdirSync !== 'function') return []
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => entry.name)
+      .sort()
+  } catch {
+    return []
+  }
+}

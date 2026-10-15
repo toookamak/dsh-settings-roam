@@ -12,10 +12,11 @@
  * 只要 prepare 阶段有任何写副作用，「确认」这个动作就名存实亡了。
  */
 
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
-import { parsePatchList, renderPatches } from './yaml-loader.js'
+import { parsePatchList, renderPatches, splitByTopLevelId } from './yaml-loader.js'
+import { profilePatchPath, listProfiles } from './home-paths.js'
 import { extractShared } from './extract.js'
 import { buildSnapshot, serializeSnapshot } from './snapshot.js'
 import { diffSnapshots, summarizeDiff } from './diff.js'
@@ -81,6 +82,36 @@ export function createSyncService(config) {
   const skillsRoot = config.skillsRoot ?? join(dshRoot, 'skills')
 
   /**
+   * 要同步哪个 profile 的配置。
+   *
+   * 原先这里假设配置在数据根目录下（join(dshRoot, 'cordis.patch.yml')），
+   * 但 DSH 的真实布局是 <dshRoot>/profiles/<名>/cordis.patch.yml
+   * （packages/boot/app-boot/src/profile.ts:276 与 :452）。
+   * 该假设让工具在真实数据上读到 0 个条目，而单元测试因 fixture 同构而全绿。
+   *
+   * profile 名的确定顺序：
+   *   1. 显式传入 config.profileName（界面/命令行可指定）
+   *   2. 只有一个 profile 时自动选它（绝大多数用户只有 web 一个）
+   *   3. 多于一个且未指定时明确报错而不是猜——猜错会写坏另一个 profile
+   */
+  const explicitProfile = config.profileName ?? null
+
+  /** 解析出本次操作的目标 profile 名。 */
+  function resolveProfileName() {
+    if (explicitProfile !== null) return explicitProfile
+    const names = listProfiles(dshRoot, { readdirSync, existsSync })
+    if (names.length === 1) return names[0]
+    if (names.length === 0) {
+      throw new Error(
+        `没有在 ${join(dshRoot, 'profiles')} 下找到任何 profile。请先从 DSH 启动一次，或显式指定 profile 名。`,
+      )
+    }
+    throw new Error(
+      `发现多个 profile（${names.join('、')}），无法确定同步哪一个。请显式指定 profile 名。`,
+    )
+  }
+
+  /**
    * 校验通道用的技能服务（ctx.skills）。没传就跳过校验。
    *
    * 为什么要它：直读文件是主通道，但它只能看见「文件在不在」，
@@ -122,6 +153,22 @@ export function createSyncService(config) {
   let backendFactoryBroken = null
 
   /**
+   * 尝试取后端；取不到或装配失败时返回 null，不抛错。
+   *
+   * 用于「有云端更好、没有也能做」的路径（例如导出到本地文件）。
+   * 与 requireBackend 的分工：需要真正推送/拉取时必须用 requireBackend，
+   * 让缺失配置立刻变成可见的错误；只是准备内容时用这个，允许降级。
+   * @returns {object|null}
+   */
+  function tryBackend() {
+    try {
+      return requireBackend()
+    } catch {
+      return null
+    }
+  }
+
+  /**
    * 是否已具备同步条件。界面用它决定显示「拉取」还是「去配置」。
    * @returns {boolean}
    */
@@ -134,12 +181,25 @@ export function createSyncService(config) {
     }
   }
 
-  const patchFile = join(dshRoot, 'cordis.patch.yml')
+  /**
+   * 目标 patch 文件的绝对路径（惰性解析并缓存）。
+   *
+   * 之所以做成函数而不是常量：profile 名可能要到运行时才能确定
+   * （自动探测唯一的 profile），解析失败时要抛出可据以行动的说明，
+   * 而不是在 createSyncService 时就让装配失败。
+   */
+  let patchFileCache = null
+  function patchFile() {
+    if (patchFileCache === null) {
+      patchFileCache = profilePatchPath(dshRoot, resolveProfileName())
+    }
+    return patchFileCache
+  }
 
   /** 读本机 patch 条目。文件不存在时视为空。 */
   function readLocalRows() {
-    if (!existsSync(patchFile)) return []
-    const text = readFileSync(patchFile, 'utf8')
+    if (!existsSync(patchFile())) return []
+    const text = readFileSync(patchFile(), 'utf8')
     return text.trim() === '' ? [] : parsePatchList(text)
   }
 
@@ -227,12 +287,52 @@ export function createSyncService(config) {
 
   return {
     /**
+     * 检查一次本机配置：取到什么、什么留在本机、技能有哪些。
+     *
+     * **只读**，不碰云端、不写任何地方。第一阶段的目标就是「能取到需要的配置」，
+     * 所以这个动作必须在没有网络、没有配置云端仓库时也能用——
+     * 它是用户第一次接触这个插件时能看到的真实结果。
+     *
+     * @returns {Promise<object>}
+     */
+    async prepareInspect() {
+      const patchExists = existsSync(patchFile())
+      const rows = readLocalRows()
+      const { shared, machine, excluded } = splitByTopLevelId(rows)
+      const skills = scanSkills(skillsRoot)
+      // 校验通道是尽力而为：服务不可用时只影响「能不能交叉核对」，
+      // 不影响直读结果本身——直读才是主通道。
+      let skillCheck = null
+      try {
+        skillCheck = await crossCheck()
+      } catch {
+        skillCheck = null
+      }
+
+      return {
+        patchFile: patchFile(),
+        patchExists,
+        total: rows.length,
+        shared,
+        machine,
+        // 既不共享也不属于本机的项不计入同步，但要让用户看见它们被排除了，
+        // 否则「我配的东西怎么没过去」会变成一个无从查证的问题。
+        excludedIds: excluded.map(row => row.id).filter(Boolean),
+        skills,
+        skillCheck,
+      }
+    },
+
+    /**
      * 推送准备：组装要写入云端的文件与差异。**只读，不写任何地方。**
      * @param {{generatedBy: string, bundles?: object, now?: Date}} input
      * @returns {Promise<{files: {path: string, content: string}[], diff: object[], summary: object}>}
      */
     async preparePush(input = {}) {
-      const backend = requireBackend()
+      // 云端仓库是可选的：本阶段的「导出到本地文件」不需要它。
+      // 原先这里无条件 requireBackend()，导致未配置仓库时连导出都做不了——
+      // 而「不联网也能把配置取出来」正是第一阶段的目标。
+      const backend = tryBackend()
       const rows = readLocalRows()
       const { patch } = extractShared({ patchRows: rows })
 
@@ -257,13 +357,21 @@ export function createSyncService(config) {
         })
       }
 
-      // 与云端现状比对，供界面展示
-      await backend.ensureReady()
-      await backend.pull()
-      const remoteSnapshotText = await backend.readFile(CLOUD_PATHS.snapshot)
-      const remoteEntries = remoteSnapshotText === null
-        ? []
-        : (JSON.parse(remoteSnapshotText).entries ?? [])
+      // 与云端现状比对，供界面展示。
+      // 未配置云端（backend 为 null）时跳过：导出到本地文件不需要比对，
+      // 此时把所有内容视为「新增」，并在结果里标明未与云端比对，
+      // 避免界面上出现一个看起来像「全部都要新增」的误导性差异。
+      let remoteEntries = []
+      let comparedWithRemote = false
+      if (backend !== null) {
+        await backend.ensureReady()
+        await backend.pull()
+        const remoteSnapshotText = await backend.readFile(CLOUD_PATHS.snapshot)
+        remoteEntries = remoteSnapshotText === null
+          ? []
+          : (JSON.parse(remoteSnapshotText).entries ?? [])
+        comparedWithRemote = true
+      }
 
       const localSnapshot = buildSnapshot({
         generatedBy: input.generatedBy ?? 'unknown',
@@ -312,6 +420,9 @@ export function createSyncService(config) {
         patchRows: patch,
         skillCheck,
         exported,
+        // 是否与云端比对过。未配置仓库时为 false，
+        // 此时 diff 只反映「本机有什么」，不代表「云端缺什么」。
+        comparedWithRemote,
       }
     },
 
@@ -387,14 +498,14 @@ export function createSyncService(config) {
 
       if (plan.remoteRows.length > 0) {
         const result = applyPatchFile({
-          targetFile: patchFile,
+          targetFile: patchFile(),
           sharedRows: plan.remoteRows,
           backupRoot: options?.backupRoot,
         })
         backup = result.backup
 
         // 写后回读校验：C2 的落地。警告非空即视为失败，不静默放过。
-        const check = verifyWriteBack(patchFile, plan.remoteRows)
+        const check = verifyWriteBack(patchFile(), plan.remoteRows)
         if (result.ok && check.ok) {
           for (const id of result.applied) {
             applied.push({ kind: 'file', name: `patch:${id}`, result: 'ok' })
