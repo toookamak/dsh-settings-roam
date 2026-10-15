@@ -21,11 +21,19 @@ import { extractShared } from './extract.js'
 import { buildSnapshot, serializeSnapshot } from './snapshot.js'
 import { diffSnapshots, summarizeDiff } from './diff.js'
 import { applyPatchFile, verifyWriteBack } from './apply.js'
-import { scanSkills, listSkillNames, crossCheckSkills } from './skills.js'
+import { scanSkills, listSkillNames, crossCheckSkills, applySkillFiles } from './skills.js'
 import { collectBundles } from './bundles.js'
 import { exportForReview } from './export.js'
 import { timestamp } from './backup.js'
 import { assertBackend } from './backends/index.js'
+import {
+  resolvePackageDir,
+  readPackage,
+  validatePackage,
+  planImport,
+  skillTargetPath,
+  isEmptyPlan,
+} from './import.js'
 
 /** 云端布局，见设计 §5.1。 */
 export const CLOUD_PATHS = Object.freeze({
@@ -206,13 +214,21 @@ export function createSyncService(config) {
     return text.trim() === '' ? [] : parsePatchList(text)
   }
 
-  /** 收集技能文件内容：{ 'skills/<名>/<相对路径>': 内容 }。 */
+  /**
+   * 收集技能文件内容：{ 'skills/<名>/<相对路径>': {content, executable} }。
+   *
+   * 带上 executable 是刻意的：技能里的脚本靠可执行位工作，
+   * 导入侧只拿到内容就重建不出这个位，脚本会在目标机器上静默失效（设计 §4.7）。
+   */
   function collectSkillFiles() {
     const out = {}
     for (const name of listSkillNames(skillsRoot)) {
       for (const record of scanSkills(skillsRoot, [name])) {
         const abs = join(skillsRoot, record.relPath)
-        out[`skills/${record.relPath}`] = readFileSync(abs, 'utf8')
+        out[`skills/${record.relPath}`] = {
+          content: readFileSync(abs, 'utf8'),
+          executable: record.executable,
+        }
       }
     }
     return out
@@ -342,7 +358,11 @@ export function createSyncService(config) {
       const patchContent = renderPatches(patch, 'settings-roam')
       const files = [
         { path: CLOUD_PATHS.patch, content: patchContent },
-        ...Object.entries(collectSkillFiles()).map(([path, content]) => ({ path, content })),
+        ...Object.entries(collectSkillFiles()).map(([path, entry]) => ({
+          path,
+          content: entry.content,
+          executable: entry.executable,
+        })),
       ]
 
       // 双通道校验：直读是主通道，服务视图是校验通道。只读，不影响写入。
@@ -527,6 +547,182 @@ export function createSyncService(config) {
         needsCredentials: collectApiKeyRefs(plan.remoteRows),
         backupPath: backup?.backupPath ?? '',
         backupFiles: backup?.backedUp ?? [],
+      }
+    },
+
+    /**
+     * 导入准备：读一份本程序导出的包，校验它，算出「将要写什么」。
+     *
+     * **只读，一个字节都不写。** 与 preparePush / preparePull 同一纪律：
+     * 用户要先看到会改什么，再决定要不要写。
+     *
+     * 为什么导入源限定为「本程序导出的包」（用户裁定 m01703）：
+     * 只有这种包带着清单与逐文件校验值，才能判断内容是否完整、有没有被改过。
+     * 接受任意目录等于放弃这层判断，而恢复配置恰恰是最不该赌的一步。
+     *
+     * @param {{packageDir?: string}} input
+     * @returns {Promise<object>}
+     */
+    async prepareImport(input = {}) {
+      const dir = resolvePackageDir(input.packageDir)
+      const pkg = readPackage(dir)
+      const check = validatePackage(pkg)
+      if (!check.ok) {
+        // 包不可用就不给「写一半」的机会：这是硬停，不是跳过某一项。
+        const error = new Error(check.errors.join('\n'))
+        error.code = 'package-invalid'
+        error.errors = check.errors
+        error.warnings = check.warnings ?? []
+        throw error
+      }
+
+      const plan = planImport(pkg)
+
+      // 与本机现状比对。语义与拉取一致：第一个参数是「现在」，第二个是「写完之后」。
+      const localRows = readLocalRows()
+      const toEntries = rows => rows.map(row => ({
+        path: `patch:${row.id}`,
+        kind: 'shared',
+        hash: hashOf(JSON.stringify(row)),
+      }))
+      const diff = diffSnapshots(
+        { entries: toEntries(localRows) },
+        { entries: toEntries(plan.patchRows) },
+      )
+
+      // 本机这一侧「有意不动」的项，也要进报告。
+      //
+      // 导出包根本不会带上本机项，所以这不会是「包里被塞了本机项」那条路径；
+      // 它回答的是另一个问题：「我在新机器上导入完之后，这台机器原本的监听地址
+      // 和主题去哪了？」用户看不到这句话，就只能靠猜——而猜错的代价是以为恢复失败了。
+      const localSplit = splitByTopLevelId(localRows)
+      const refusedIds = new Set(plan.refused.map(item => item.name ?? ''))
+      const keptLocal = []
+      for (const row of localSplit.machine) {
+        if (row.id === undefined || refusedIds.has(row.id)) continue
+        keptLocal.push({
+          path: `本机:${row.id}`,
+          name: row.id,
+          source: 'local',
+          reason: 'machine-entry',
+          explanation: `「${row.id}」是本机配置（监听地址、主题、默认模型这类），`
+            + '导入不会改变它，这台机器上保持当前的值。',
+        })
+      }
+      for (const row of localSplit.excluded) {
+        if (row.id === undefined || refusedIds.has(row.id)) continue
+        keptLocal.push({
+          path: `本机:${row.id}`,
+          name: row.id,
+          source: 'local',
+          reason: 'excluded-entry',
+          explanation: `「${row.id}」不在公共线范围内，导入不会碰它。`,
+        })
+      }
+
+      let skillCheck = null
+      try {
+        skillCheck = await crossCheck()
+      } catch {
+        skillCheck = null
+      }
+
+      return {
+        ...plan,
+        refused: [...plan.refused, ...keptLocal],
+        warnings: check.warnings ?? [],
+        diff,
+        summary: summarizeDiff(diff),
+        skillCheck,
+        skillsRoot,
+        patchFile: patchFile(),
+        empty: isEmptyPlan(plan),
+      }
+    },
+
+    /**
+     * 执行导入。
+     *
+     * 与 applyPull 同一条纪律：备份 → 写入 → 回读校验，警告非空即视为失败。
+     * 但导入还多一层必须说清的事：包里有、而本机**有意不写回**的那些项，
+     * 必须原样出现在报告里。否则用户会把「导入完成」理解为「环境完全一致」，
+     * 而这正是本项目从头到尾要消除的那个误解。
+     *
+     * @param {object} plan - prepareImport 的返回
+     * @param {{backupRoot?: string}} options
+     * @returns {Promise<object>} RestoreReport
+     */
+    async applyImport(plan, options = {}) {
+      const applied = []
+      const skipped = []
+      const backups = []
+      const backupRoot = options?.backupRoot ?? join(dshRoot, 'settings-roam', 'backup')
+      const stamp = timestamp()
+
+      if (Array.isArray(plan.patchRows) && plan.patchRows.length > 0) {
+        const result = applyPatchFile({
+          targetFile: patchFile(),
+          sharedRows: plan.patchRows,
+          backupRoot,
+        })
+        if (result.backup) backups.push(result.backup)
+
+        const check = verifyWriteBack(patchFile(), plan.patchRows)
+        if (result.ok && check.ok) {
+          for (const id of result.applied) {
+            applied.push({ kind: 'file', name: `patch:${id}`, result: 'ok' })
+          }
+        } else {
+          for (const id of [...result.warnings, ...check.missing, ...check.mismatch]) {
+            skipped.push({ kind: 'file', name: String(id), result: 'skipped', reason: 'unknown' })
+          }
+        }
+      }
+
+      if (Array.isArray(plan.skillFiles) && plan.skillFiles.length > 0) {
+        const result = applySkillFiles({
+          skillsRoot,
+          files: plan.skillFiles,
+          targetPathOf: path => skillTargetPath(skillsRoot, path),
+          backupRoot,
+          stamp,
+        })
+        if (result.backup) backups.push(result.backup)
+        for (const path of result.written) {
+          applied.push({ kind: 'file', name: path, result: 'ok' })
+        }
+        for (const item of result.failed) {
+          skipped.push({
+            kind: 'file',
+            name: item.path,
+            result: 'skipped',
+            reason: 'unreadable',
+            detail: item.reason,
+          })
+        }
+      }
+
+      // 有意不写回的项：不是失败，但正是「同步配置」与「复制环境」的区别所在。
+      for (const item of plan.refused ?? []) {
+        skipped.push({
+          kind: 'config',
+          name: item.path,
+          result: 'skipped',
+          reason: item.reason,
+          explanation: item.explanation,
+        })
+      }
+
+      return {
+        applied,
+        skipped,
+        needsRestart: applied.length > 0,
+        needsCredentials: collectApiKeyRefs(plan.patchRows ?? []),
+        backupPath: backups[0]?.backupPath ?? '',
+        backupFiles: backups.flatMap(item => item.backedUp ?? []),
+        pluginNames: plan.pluginNames ?? null,
+        packageDir: plan.packageDir ?? '',
+        skillCheck: plan.skillCheck ?? null,
       }
     },
 

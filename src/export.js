@@ -107,12 +107,17 @@ function buildManifest(input, written) {
     generatedBy: input.generatedBy ?? 'unknown',
     total: written.length,
     files: written.map(path => {
-      const content = input.files.find(f => f.path === path)?.content ?? ''
-      return {
+      const entry = input.files.find(f => f.path === path)
+      const content = entry?.content ?? ''
+      const record = {
         path,
         bytes: Buffer.byteLength(content, 'utf8'),
         sha256: hashContent(content),
       }
+      // 可执行位单独记一笔：技能里的脚本靠它工作，丢了就在目标机器上静默失效
+      // （设计 §4.7 第 1 条）。只对知道的条目记，不凭空给所有文件编一个 false。
+      if (typeof entry?.executable === 'boolean') record.executable = entry.executable
+      return record
     }),
     diff: input.summary ?? null,
   }

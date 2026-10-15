@@ -10,8 +10,9 @@
  * 技能本体就是文件，直读得到的就是要同步的内容；走 ctx.skills 反而多一层抽象。
  */
 
-import { readdirSync, statSync, mkdirSync, copyFileSync, chmodSync } from 'node:fs'
-import { join, sep } from 'node:path'
+import { readdirSync, statSync, mkdirSync, copyFileSync, chmodSync, existsSync, writeFileSync } from 'node:fs'
+import { join, sep, dirname } from 'node:path'
+import { createBackup } from './backup.js'
 
 /**
  * 列出技能目录下的技能名（各技能一个子目录）。
@@ -128,3 +129,53 @@ export async function crossCheckSkills(skillService, directNames) {
     serviceNames,
   }
 }
+
+/**
+ * 把一份导出包里的技能文件写回本机技能目录。
+ *
+ * 与 copySkills 的区别：copySkills 是「从另一个技能目录搬」，来源是活的文件系统，
+ * 模式位可以从源文件读；这里是「从包里的内容重建」，模式位只能来自清单记录
+ * （清单里没有 executable 时按 0o644 写，与没有可执行位的普通文件一致）。
+ *
+ * 写入前逐个备份已存在的目标文件。技能目录里可能有用户自己改过的东西，
+ * 覆盖它而不留副本，等于把「回退」这件事变成一句空话。
+ *
+ * @param {{
+ *   skillsRoot: string,
+ *   files: {path: string, content: string, executable?: boolean}[],
+ *   targetPathOf: (path: string) => string,
+ *   backupRoot?: string,
+ *   stamp?: string,
+ * }} input
+ * @returns {{written: string[], failed: {path: string, reason: string}[], backup: object|null}}
+ */
+export function applySkillFiles(input) {
+  const { skillsRoot, files, targetPathOf, backupRoot } = input
+  const written = []
+  const failed = []
+
+  const targets = files.map(file => ({ file, target: targetPathOf(file.path) }))
+  const existing = targets.filter(item => existsSync(item.target)).map(item => item.target)
+
+  let backup = null
+  if (backupRoot !== undefined && backupRoot !== null && existing.length > 0) {
+    backup = createBackup({ files: existing, destRoot: backupRoot, stamp: input.stamp })
+  }
+
+  for (const { file, target } of targets) {
+    try {
+      mkdirSync(dirname(target), { recursive: true })
+      writeFileSync(target, file.content, 'utf8')
+      // 保留可执行位（设计 §4.7）：脚本靠它工作，丢了会在目标机器上静默失效。
+      chmodSync(target, file.executable === true ? 0o755 : 0o644)
+      written.push(file.path)
+    } catch (error) {
+      failed.push({ path: file.path, reason: String(error?.message ?? error) })
+    }
+  }
+
+  return { written, failed, backup }
+}
+
+/** 技能根目录的子目录名，供调用方拼接。 */
+export const SKILLS_DIRNAME = 'skills'

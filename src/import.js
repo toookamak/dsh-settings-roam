@@ -64,7 +64,7 @@ export function resolvePackageDir(dir, fsLike = { existsSync, readdirSync }) {
   try {
     entries = fsLike.readdirSync(dir, { withFileTypes: true })
   } catch {
-    throw new Error(`读不到这个目录：${dir}`)
+    throw packageError(`读不到这个目录：${dir}`)
   }
 
   const candidates = entries
@@ -74,7 +74,7 @@ export function resolvePackageDir(dir, fsLike = { existsSync, readdirSync }) {
     .sort()
 
   if (candidates.length === 0) {
-    throw new Error(
+    throw packageError(
       `这个目录里没有找到导出包：${dir}\n` +
       '导入只接受本程序导出的包（目录里应当有 manifest.json）。' +
       '如果你指的是导出根目录，请确认里面至少有一次成功的导出。',
@@ -82,6 +82,21 @@ export function resolvePackageDir(dir, fsLike = { existsSync, readdirSync }) {
   }
 
   return join(dir, candidates[candidates.length - 1])
+}
+
+/**
+ * 造一个「这个包不能用」的错误。
+ *
+ * 带 code 是刻意的：调用方（命令行、设置页路由）要靠它区分
+ * 「用户指错了目录／包坏了」与「程序自己出了问题」——前者要原样告诉用户怎么办，
+ * 后者要当成缺陷报出来。只靠文案区分，迟早会有人改一句话就把它弄丢。
+ * @param {string} message
+ * @returns {Error & {code: string}}
+ */
+export function packageError(message) {
+  const error = new Error(message)
+  error.code = 'package-invalid'
+  return error
 }
 
 /**
@@ -274,7 +289,12 @@ export function planImport(pkg) {
         refuse(path, 'unknown-path', '这个技能的路径不合法，已忽略。')
         continue
       }
-      skillFiles.push({ path: PACKAGE_PATHS.skillsPrefix + rel, content: file.content })
+      const record = (pkg.manifest?.files ?? []).find(item => item?.path === path)
+      const entry = { path: PACKAGE_PATHS.skillsPrefix + rel, content: file.content }
+      // 可执行位来自清单记录。清单没有这一项（更早版本导出的包）时不带，
+      // 落到 applySkillFiles 的默认模式——不凭空猜它是可执行的。
+      if (typeof record?.executable === 'boolean') entry.executable = record.executable
+      skillFiles.push(entry)
       continue
     }
 

@@ -65,8 +65,43 @@ test('空报告不产生误导性的提示', () => {
 test('跳过原因常量表覆盖设计规定的全部取值', () => {
   assert.deepEqual(
     [...SKIP_REASONS].sort(),
-    ['build-blocked', 'local-path-source', 'registry-unreachable', 'unknown', 'version-incompatible'],
+    [
+      // sort() 之后的顺序；两类都列出，便于一眼看出哪些是新增的
+      'build-blocked',
+      'excluded-entry',   // 导入新增
+      'local-path-source',
+      'machine-entry',    // 导入新增
+      'registry-unreachable',
+      'unknown',
+      'unknown-path',     // 导入新增
+      'unreadable',       // 导入新增
+      'version-incompatible',
+    ],
   )
+})
+
+test('导入侧的四类跳过原因各有可行动的说明，且互不重复', () => {
+  const items = [
+    { reason: 'machine-entry', name: 'patch:webserver' },
+    { reason: 'excluded-entry', name: 'patch:.credentials.yaml' },
+    { reason: 'unknown-path', name: 'other/thing.txt' },
+    { reason: 'unreadable', name: 'patch:llm-pi-ai', detail: '意料之外的标记' },
+  ]
+  const texts = items.map(item => explainSkip(item))
+  assert.equal(new Set(texts).size, items.length, '四类说明不应互相重复')
+  assert.ok(texts[0].includes('本机配置'), '本机项要说清为什么不动它')
+  assert.ok(texts[1].includes('不写回'), '被排除项要说清是「有意不写」而非失败')
+  assert.ok(texts[2].includes('只接受'), '不认识的路由要给出接受范围')
+  assert.ok(texts[3].includes('意料之外的标记'), '读不出来的原因要原样带出来')
+})
+
+test('条目自带说明时原样采用，不被更笼统的说法盖掉', () => {
+  const item = {
+    reason: 'machine-entry',
+    name: 'patch:ui-theme',
+    explanation: '「ui-theme」属于本机配置（监听地址、主题、默认模型这类），不随导入改变。',
+  }
+  assert.equal(explainSkip(item), item.explanation)
 })
 
 // ─── 校验结果必须到达用户眼前（缺口 A 的下半截）────────────────────
