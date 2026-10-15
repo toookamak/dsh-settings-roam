@@ -355,7 +355,7 @@ try {
     failed = true
   } else {
     const entry = last[0]
-    const expected = ['exportRoot', 'importRoot', 'profileName', 'repoUrl']
+    const expected = ['branch', 'exportRoot', 'importRoot', 'profileName', 'repoUrl']
     const got = [...entry.keys].sort()
     if (JSON.stringify(got) !== JSON.stringify(expected)) {
       console.error(`✗ 设置页字段与预期不符：期望 ${expected.join('/')}，实际 ${got.join('/')}`)

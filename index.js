@@ -14,8 +14,11 @@ import { createGitBackend } from './src/backends/git.js'
 import { createSyncService } from './src/service.js'
 import { buildPushOverview, buildPullOverview, buildImportOverview } from './src/overview.js'
 import { describeRoutes } from './src/routes.js'
+import { DEFAULT_BRANCH } from './src/constants.js'
 
 export const name = 'settings-roam'
+
+export { DEFAULT_BRANCH } from './src/constants.js'
 
 /**
  * 插件配置的 schema —— 设置页上的「基础配置选项」就是它。
@@ -50,6 +53,9 @@ export const Config = z.object({
   ).volatile(),
   importRoot: z.string().default('').description(
     '导入来源目录，用于从本程序导出的包里回填配置。留空时去导出目录里找最新的一次。',
+  ).volatile(),
+  branch: z.string().default('').description(
+    '备份放在仓库的哪条分支。一个仓库可以放多个插件的备份，各占一条分支；留空用 settings-roam。',
   ).volatile(),
 })
 
@@ -156,6 +162,10 @@ export function apply(ctx, config) {
       return createGitBackend({
         repoUrl,
         workDir: join(dshRoot, 'settings-roam', 'work'),
+        // 一个仓库很可能同时放着别的插件的备份，所以固定占一条自己的分支。
+        // 这不是可选的美化：都往默认分支上写，两个插件会互相把对方的文件
+        // 当成「云端多出来的东西」。
+        branch: readOption('branch') ?? DEFAULT_BRANCH,
       })
     },
   })

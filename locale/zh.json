@@ -17,6 +17,10 @@
       "label": "仓库地址",
       "hint": "远程 Git 仓库地址。填上之后「推送」「拉取」才可用。"
     },
+    "branch": {
+      "label": "备份放在哪条分支",
+      "hint": "同一个仓库可以放多个插件的备份，各占一条分支，免得互相覆盖。留空用 settings-roam。"
+    },
     "profileName": {
       "label": "同步哪个 profile",
       "hint": "留空自动判断；本机有多个 profile 时必须填，否则会明确报错而不是猜。"

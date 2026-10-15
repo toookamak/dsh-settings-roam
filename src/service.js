@@ -33,6 +33,7 @@ import {
   planImport,
   skillTargetPath,
   isEmptyPlan,
+  PACKAGE_PATHS,
 } from './import.js'
 
 /** 云端布局，见设计 §5.1。 */
@@ -561,6 +562,32 @@ export function createSyncService(config) {
 
       const diff = diffSnapshots({ entries: localEntries }, { entries: remoteEntries })
 
+      // 云端有哪些技能文件？只有快照清单知道——后端刻意只有 readFile / writeFile
+      // 五个动作，没有「列目录」，这样换 WebDAV 之类的介质时不必另加接口。
+      // 原先这里只读了配置，于是「拉取」把供应商定义带回来了、技能却没带回来，
+      // 而报告上一个字都没提，看起来像技能本来就不同步。
+      const remoteSkillFiles = []
+      const snapshotText = await backend.readFile(CLOUD_PATHS.snapshot)
+      if (snapshotText !== null && snapshotText !== '') {
+        let entries = []
+        try {
+          entries = JSON.parse(snapshotText).entries ?? []
+        } catch {
+          entries = []
+        }
+        for (const entry of entries) {
+          const path = entry?.path
+          if (typeof path !== 'string' || !path.startsWith(PACKAGE_PATHS.skillsPrefix)) continue
+          const content = await backend.readFile(path)
+          if (content === null) continue
+          remoteSkillFiles.push({
+            path,
+            content,
+            executable: entry.executable === true,
+          })
+        }
+      }
+
       // 拉取侧同样走双通道：云端带来的技能会落到本机，落地前先看清本机
       // 服务视图里有什么。只读，不改任何地方。
       const skillCheck = await crossCheck()
@@ -570,6 +597,7 @@ export function createSyncService(config) {
         summary: summarizeDiff(diff),
         remoteRows,
         remotePatchText: patchText,
+        remoteSkillFiles,
         skillCheck,
       }
     },
@@ -607,6 +635,32 @@ export function createSyncService(config) {
           for (const id of [...result.warnings, ...check.missing, ...check.mismatch]) {
             skipped.push({ kind: 'file', name: String(id), result: 'skipped', reason: 'unknown' })
           }
+        }
+      }
+
+      // 技能文件：同样先备份再写。可执行位跟着内容一起落，否则技能里的脚本
+      // 会在新机器上静默失效（设计 §4.7 第 1 条）。
+      const skillFiles = plan.remoteSkillFiles ?? []
+      if (skillFiles.length > 0) {
+        const result = applySkillFiles({
+          skillsRoot,
+          files: skillFiles,
+          targetPathOf: path => skillTargetPath(skillsRoot, path),
+          backupRoot: options?.backupRoot,
+          stamp: options?.stamp,
+        })
+        if (result.backup !== null && backup === null) backup = result.backup
+        for (const path of result.written) {
+          applied.push({ kind: 'file', name: path, result: 'ok' })
+        }
+        for (const item of result.failed) {
+          skipped.push({
+            kind: 'file',
+            name: item.path,
+            result: 'skipped',
+            reason: 'unreadable',
+            detail: item.reason,
+          })
         }
       }
 

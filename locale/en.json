@@ -17,6 +17,10 @@
       "label": "Repository URL",
       "hint": "Remote Git repository. Push and Pull become available once this is set."
     },
+    "branch": {
+      "label": "Branch for the backup",
+      "hint": "One repository can hold backups from several plugins, each on its own branch. Empty uses settings-roam."
+    },
     "profileName": {
       "label": "Profile to sync",
       "hint": "Leave empty to detect automatically. Required when this machine has several profiles."

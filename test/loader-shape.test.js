@@ -226,7 +226,7 @@ const byClass = (el, className) => (el?.children ?? []).find(c => c?.props?.clas
 const flat = el => JSON.stringify(el)
 
 /** 造一个 configForms 认得出来的命名空间视图（schema 是 $ref 风格）。 */
-function namespaceView(ns, keys = ['repoUrl', 'profileName', 'exportRoot', 'importRoot']) {
+function namespaceView(ns, keys = ['repoUrl', 'branch', 'profileName', 'exportRoot', 'importRoot']) {
   return { ns, schema: { uid: 21, refs: { 21: { dict: Object.fromEntries(keys.map((k, i) => [k, i])) } } } }
 }
 
@@ -547,15 +547,15 @@ test('加载中与执行中禁用全部动作 —— 不给双击留下第二次
 
 // ─── 配置项（用户要求「设置页面要有基础的配置选项」）──────────────────
 // 地址／选项一律不硬编码进源码：写在源码里的选项，改一次要重新装一次插件。
-// 四个字段由 index.js 的 Config schema 自动生成表单，这里锁住界面这一侧。
+// 字段由 index.js 的 Config schema 自动生成表单，这里锁住界面这一侧。
 
-test('配置卡列出四个字段，且每个字段都带说明文字', async () => {
+test('配置卡列出每个字段，且每个字段都带说明文字', async () => {
   const exported = await loadClient('config-fields')
   const card = render(exported.ConfigCard({ form: fakeForm(), t: exported.makeT('zh') }))
 
   assert.equal(byClass(card, 'roam-card-title').children[0], '云端仓库')
   const fields = (card.children ?? []).filter(c => c?.props?.className === 'roam-field')
-  assert.equal(fields.length, 4, '四个字段都要出现在界面上')
+  assert.equal(fields.length, 5, '每个字段都要出现在界面上')
   for (const field of fields) {
     const label = byClass(field, 'roam-field-label')
     const hint = byClass(field, 'roam-field-hint')
@@ -564,12 +564,12 @@ test('配置卡列出四个字段，且每个字段都带说明文字', async ()
   }
 })
 
-test('四个字段都必须说明自己起什么作用 —— 尤其不能让「导入目录」继续自称没用', async () => {
+test('每个字段都必须说明自己起什么作用 —— 尤其不能让「导入目录」继续自称没用', async () => {
   const exported = await loadClient('config-stage')
   const card = render(exported.ConfigCard({ form: fakeForm(), t: exported.makeT('zh') }))
   const fields = (card.children ?? []).filter(c => c?.props?.className === 'roam-field')
   const hints = fields.map(f => byClass(f, 'roam-field-hint').children[0])
-  assert.equal(hints.length, 4)
+  assert.equal(hints.length, 5)
   assert.ok(hints.every(h => typeof h === 'string' && h.length > 0), '每个字段都要有说明')
   // 第二阶段已落地，界面上不能再留着「尚未生效」的占位话术——用户会以为它没用
   assert.ok(

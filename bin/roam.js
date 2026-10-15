@@ -25,7 +25,9 @@ import { join } from 'node:path'
 import { resolveDshHome } from '../src/home-paths.js'
 import { createSyncService } from '../src/service.js'
 import { createGitBackend } from '../src/backends/git.js'
+import { timestamp } from '../src/backup.js'
 import { buildPushOverview } from '../src/overview.js'
+import { DEFAULT_BRANCH } from '../src/constants.js'
 import { buildReportView, explainSkip } from '../src/report.js'
 
 const USAGE = `设置漫游 —— 把一台机器的 DSH 配置搬到另一台
@@ -34,6 +36,8 @@ const USAGE = `设置漫游 —— 把一台机器的 DSH 配置搬到另一台
   dsh-settings-roam inspect           取一次配置并打印摘要（只读，不写任何地方）
   dsh-settings-roam export [目录]     取一次配置并导出到磁盘，供打开核对
   dsh-settings-roam import <目录>     读一份导出包（默认只算计划，不动本机）
+  dsh-settings-roam push [目录]       推到云端（默认只算差异，--yes 才写）
+  dsh-settings-roam pull              从云端拉回本机（默认只算差异，--yes 才写）
   dsh-settings-roam doctor            检查数据根目录、云端仓库配置是否齐备
   dsh-settings-roam help              显示这份帮助
 
@@ -41,17 +45,22 @@ const USAGE = `设置漫游 —— 把一台机器的 DSH 配置搬到另一台
   --dsh-home <路径>   覆盖 DSH 数据根目录（默认 $DSH_HOME 或 ~/.dsh）
   --profile <名字>    指定要同步哪个 profile（默认自动判断唯一的一个）
   --repo <地址>       云端 git 仓库地址（未配置时 export 仍可用）
-  --yes, -y           import 时真正写入；不加时只打印计划
+  --branch <名字>     备份放在仓库的哪条分支（默认 settings-roam）
+  --yes, -y           push／pull／import 时真正写入；不加时只打印计划
   --json              以 JSON 输出，便于脚本处理
 
 说明：
   inspect 与 export 都不需要云端仓库——第一阶段的目标是「能取到配置」，
   没有网络也应当可用。
 
-  import 刻意分两步：先只算一遍「会改什么」给你看，加上 --yes 才真的写。
+  import 与 pull 刻意分两步：先只算一遍「会改什么」给你看，加上 --yes 才真的写。
   写入前会把被覆盖的文件备份下来，报告里给出备份路径。
   包里的本机项（监听地址、主题、默认模型这类）一律不写回——
   这台机器保持它自己的值。
+
+  push 默认也会先导出到本地一份（可以用 [目录] 指定位置），
+  这样「推上去的」和「你核对过的」是同一份内容。
+  凭据由系统 git 自己管（credential helper），本程序不接触任何密码与令牌。
 `
 
 /** 极简参数解析。刻意不引第三方库：这个入口要能在任何环境直接跑起来。 */
@@ -65,9 +74,11 @@ export function parseArgs(argv) {
     else if (arg === '--dsh-home') options.dshHome = argv[++i]
     else if (arg === '--repo') options.repo = argv[++i]
     else if (arg === '--profile') options.profile = argv[++i]
+    else if (arg === '--branch') options.branch = argv[++i]
     else if (arg.startsWith('--dsh-home=')) options.dshHome = arg.slice('--dsh-home='.length)
     else if (arg.startsWith('--repo=')) options.repo = arg.slice('--repo='.length)
     else if (arg.startsWith('--profile=')) options.profile = arg.slice('--profile='.length)
+    else if (arg.startsWith('--branch=')) options.branch = arg.slice('--branch='.length)
     else if (arg === '-h' || arg === '--help') options.help = true
     else rest.push(arg)
   }
@@ -85,6 +96,7 @@ export function buildService(options = {}) {
     : () => createGitBackend({
       repoUrl: options.repo,
       workDir: join(dshRoot, 'settings-roam', 'work'),
+      branch: options.branch ?? DEFAULT_BRANCH,
     })
   return {
     dshRoot,
@@ -159,6 +171,109 @@ async function cmdExport({ service, dshRoot }, options) {
   }
   console.log('')
   console.log('打开上面目录里的「概要.md」可以逐项核对。')
+  return 0
+}
+
+/**
+ * 推到云端。
+ *
+ * 分两步，和界面里同一个道理：先算一份差异给你看，加 --yes 才真的写。
+ * 不加 --yes 时连本地导出都不做——先让人看清要推什么，再决定。
+ */
+async function cmdPush({ service, dshRoot }, options) {
+  if (!service.isConfigured()) {
+    console.error('还没配置云端仓库。加一个 --repo <地址>，或在插件设置里填上。')
+    return 1
+  }
+
+  const stamp = timestamp()
+  const plan = await service.preparePush({
+    generatedBy: options.branch === undefined ? 'cli' : `cli@${options.branch}`,
+    exportRoot: options.args[0] ?? service.defaultExportRoot(),
+    stamp,
+  })
+
+  const summary = plan.summary ?? { add: 0, modify: 0, delete: 0 }
+  if (options.json) {
+    console.log(JSON.stringify({
+      willPush: plan.files.map(f => f.path),
+      comparedWithRemote: plan.comparedWithRemote,
+      summary,
+      exportPath: plan.exported?.exportPath ?? null,
+    }, null, 2))
+  } else {
+    console.log(`数据根目录：${dshRoot}`)
+    console.log(`准备推送 ${plan.files.length} 个文件：`)
+    for (const file of plan.files) console.log(`  ${file.path}`)
+    if (plan.comparedWithRemote) {
+      console.log(`与云端相比：新增 ${summary.add}、修改 ${summary.modify}`)
+      if ((summary.delete ?? 0) > 0) {
+        console.log(`云端另有 ${summary.delete} 项本机没有——不会被删掉，本程序从不删除本机的东西。`)
+      }
+    } else {
+      console.log('没有与云端比对（这一份只说明本机有什么）。')
+    }
+    if (plan.exported?.exportPath) {
+      console.log(`本地也留了一份可核对的副本：${plan.exported.exportPath}`)
+    }
+  }
+
+  if (!options.yes) {
+    console.log('')
+    console.log('以上是预览，**没有写入任何地方**。确认无误后加 --yes 再跑一次。')
+    return 0
+  }
+
+  const result = await service.confirmPush(plan)
+  console.log('')
+  console.log(`已推送到云端：${result.pushed.length} 个文件`)
+  return 0
+}
+
+/**
+ * 从云端拉回本机。
+ *
+ * 默认只算差异。加 --yes 才会写本机，写之前先备份。
+ */
+async function cmdPull({ service, dshRoot }, options) {
+  if (!service.isConfigured()) {
+    console.error('还没配置云端仓库。加一个 --repo <地址>，或在插件设置里填上。')
+    return 1
+  }
+
+  const plan = await service.preparePull()
+  const summary = plan.summary ?? { add: 0, modify: 0, delete: 0 }
+
+  if (options.json) {
+    console.log(JSON.stringify({
+      diff: plan.diff,
+      summary,
+      cloudRows: plan.remoteRows.map(row => row.id ?? '(无 id)'),
+    }, null, 2))
+  } else {
+    console.log(`数据根目录：${dshRoot}`)
+    console.log(`云端与本机相比：新增 ${summary.add}、修改 ${summary.modify}`)
+    for (const item of plan.diff) {
+      // delete 在这里的含义是「本机有、云端没有」。标注清楚，
+      // 免得用户以为点 --yes 会把本机的条目删掉——我们从不删本机的东西。
+      const mark = item.action === 'add' ? '＋' : item.action === 'delete' ? '·' : '～'
+      const note = item.action === 'delete' ? '（本机独有，不会删除）' : ''
+      console.log(`  ${mark} ${item.path}${note}`)
+    }
+  }
+
+  if (!options.yes) {
+    console.log('')
+    console.log('以上是预览，**本机文件一个字节都没改**。确认无误后加 --yes 再跑一次。')
+    return 0
+  }
+
+  const report = await service.applyPull(plan, { backupRoot: service.defaultBackupRoot() })
+  const view = buildReportView(report)
+  console.log('')
+  console.log(`已应用 ${view.applied.length} 项，跳过 ${view.skipped.length} 项。`)
+  for (const notice of view.notices) console.log(`· ${notice}`)
+  if (report.backupPath) console.log(`覆盖前的原件已备份到：${report.backupPath}`)
   return 0
 }
 
@@ -290,7 +405,14 @@ async function main(argv) {
     return 0
   }
 
-  const commands = { inspect: cmdInspect, export: cmdExport, import: cmdImport, doctor: cmdDoctor }
+  const commands = {
+    inspect: cmdInspect,
+    export: cmdExport,
+    import: cmdImport,
+    push: cmdPush,
+    pull: cmdPull,
+    doctor: cmdDoctor,
+  }
   const run = commands[parsed.command]
   if (!run) {
     console.error(`未知命令：${parsed.command}`)

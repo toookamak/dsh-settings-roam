@@ -17,13 +17,13 @@ test('留空也能解析：插件默认处于「装着但待配置」状态', ()
   assert.equal(val(value.exportRoot), '')
 })
 
-test('四个字段都在，且顺序与界面阅读顺序一致', () => {
+test('每个可配置字段都在，且顺序与界面阅读顺序一致', () => {
   const keys = Object.keys(Config.dict ?? Config.meta?.dict ?? {})
 
   // schemastery 把 object 的字段放在 dict 上；不同的实例暴露方式略有不同，
   // 这里退化成「解析结果里有这些键」来断言，避免绑死内部结构。
   const parsed = Config({})
-  for (const key of ['repoUrl', 'profileName', 'exportRoot', 'importRoot']) {
+  for (const key of ['repoUrl', 'branch', 'profileName', 'exportRoot', 'importRoot']) {
     assert.ok(key in parsed, `字段 ${key} 应存在${keys.length ? `（dict: ${keys.join(',')}）` : ''}`)
   }
 })
@@ -42,11 +42,11 @@ test('每个字段都有说明文字 —— 设置页上唯一的解释来源', 
   }
 })
 
-test('四个字段都已接入，说明里不得再出现「尚未生效」', () => {
+test('每个字段都已接入，说明里不得再出现「尚未生效」', () => {
   // 这条以前是反过来的：importRoot 当时是占位，必须自称「未生效」。
   // 第二阶段落地后必须把话术撤掉——留着会让人以为填了没用，
   // 而它现在确实会去那个目录里找包。
-  for (const key of ['repoUrl', 'profileName', 'exportRoot', 'importRoot']) {
+  for (const key of ['repoUrl', 'branch', 'profileName', 'exportRoot', 'importRoot']) {
     assert.doesNotMatch(
       Config.dict[key].meta.description, /尚未生效|占位/,
       `字段 ${key} 已经接入，说明里不该再标未生效`,

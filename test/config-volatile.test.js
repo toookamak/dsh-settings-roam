@@ -34,13 +34,13 @@ test('每个字段都是 volatile —— 否则整个条目不会出现在设置
   }
 })
 
-test('设置页确实会为这个 schema 生成表单，且四个字段都在', () => {
+test('设置页确实会为这个 schema 生成表单，且每个字段都在', () => {
   const form = volatileForm(Config)
 
   assert.notEqual(form, undefined, 'volatileForm 返回 undefined 时设置页不会有这个插件')
   assert.deepEqual(
     Object.keys(form.dict).sort(),
-    ['exportRoot', 'importRoot', 'profileName', 'repoUrl'],
+    ['branch', 'exportRoot', 'importRoot', 'profileName', 'repoUrl'],
   )
 })
 

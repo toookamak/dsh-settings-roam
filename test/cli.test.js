@@ -283,3 +283,33 @@ test('真跑 CLI：目录里没有导出包时退出码为 1，并说清缺的�
   assert.match(result.stderr, /manifest\.json/)
   rmSync(root, { recursive: true })
 })
+
+// ─── push / pull 两个命令的骨架 ────────────────────────────────────────
+
+test('真跑 CLI：push 未配置仓库时说明怎么配，而不是丢一个 git 报错', () => {
+  // 没配仓库是正常状态（插件应当「装好待配置」），所以这里要的是一句
+  // 用户能照做的话，而不是从 git 里冒出来的原始错误。
+  const { root, dshRoot } = sandbox()
+  const result = spawnSync(process.execPath, [BIN, '--dsh-home', dshRoot, 'push'], { encoding: 'utf8' })
+
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /还没配置云端仓库/)
+  assert.match(result.stderr, /--repo/)
+  rmSync(root, { recursive: true })
+})
+
+test('真跑 CLI：pull 未配置仓库时同样给出可行动的说明', () => {
+  const { root, dshRoot } = sandbox()
+  const result = spawnSync(process.execPath, [BIN, '--dsh-home', dshRoot, 'pull'], { encoding: 'utf8' })
+
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /还没配置云端仓库/)
+  rmSync(root, { recursive: true })
+})
+
+test('push 与 pull 在 help 里都写了「不加 --yes 只算不写」', () => {
+  const result = spawnSync(process.execPath, [BIN, 'help'], { encoding: 'utf8' })
+  assert.match(result.stdout, /push \[目录\]/)
+  assert.match(result.stdout, /pull +从云端拉回本机/)
+  assert.match(result.stdout, /不加时只打印计划/)
+})

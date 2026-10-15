@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { writeFileSync, mkdirSync, rmSync, readFileSync, existsSync } from 'node:fs'
+import { writeFileSync, mkdirSync, rmSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { createSyncService } from '../src/service.js'
 import { parsePatchList } from '../src/yaml-loader.js'
@@ -654,4 +654,70 @@ test('留空的选项回到默认位置，而不是变成空字符串', () => {
   })
   assert.equal(service.defaultExportRoot(), '/tmp/roam-live-root/settings-roam/export')
   assert.equal(service.defaultImportRoot(), '/tmp/roam-live-root/settings-roam/export')
+})
+
+// ─── 拉取要把技能也带回来 ─────────────────────────────────────────────
+
+test('拉取会把云端的技能文件也落到本机，而不是只带配置', async () => {
+  // 曾经的真实缺陷：preparePull 只读了 config/profile.patch.yml，
+  // 技能一个都没读。于是「拉取」把供应商定义带回来了、技能没带回来，
+  // 而报告上一个字都没提——看起来像技能本来就不同步。
+  const s = sandbox()
+  {
+    const backend = fakeBackend({
+      'config/profile.patch.yml': [
+        '- id: llm-pi-ai',
+        '  config:',
+        '    providers: {}',
+        '',
+      ].join('\n'),
+      'snapshot.json': JSON.stringify({
+        entries: [
+          { path: 'config/profile.patch.yml', kind: 'config' },
+          { path: 'skills/demo-skill/SKILL.md', kind: 'skill', executable: false },
+          { path: 'skills/tool/run.sh', kind: 'skill', executable: true },
+        ],
+      }),
+      'skills/demo-skill/SKILL.md': '# 从云端来的\n',
+      'skills/tool/run.sh': '#!/bin/sh\necho hi\n',
+    })
+    const service = createSyncService({ dshRoot: s.dshRoot, backend, profileName: 'web' })
+
+    const plan = await service.preparePull()
+    assert.equal(plan.remoteSkillFiles.length, 2, '云端清单里的技能文件都要被读出来')
+
+    // 预览阶段一个字节都不能写。
+    assert.equal(existsSync(join(s.dshRoot, 'skills', 'demo-skill', 'SKILL.md')), false)
+
+    const report = await service.applyPull(plan, { backupRoot: join(s.dshRoot, 'backups') })
+
+    assert.equal(readFileSync(join(s.dshRoot, 'skills', 'demo-skill', 'SKILL.md'), 'utf8'), '# 从云端来的\n')
+    assert.ok(report.applied.some(item => item.name === 'skills/demo-skill/SKILL.md'),
+      `报告里要能看出技能也写了：${report.applied.map(i => i.name).join(', ')}`)
+    // 可执行位必须跟着内容一起落，否则技能里的脚本在新机器上会静默失效。
+    const mode = statSync(join(s.dshRoot, 'skills', 'tool', 'run.sh')).mode & 0o777
+    assert.equal(mode, 0o755, `可执行位应当是 755，实际 ${mode.toString(8)}`)
+  }
+})
+
+test('拉取不会删掉本机独有的技能', async () => {
+  const s = sandbox()
+  {
+    mkdirSync(join(s.dshRoot, 'skills', 'local-only'), { recursive: true })
+    writeFileSync(join(s.dshRoot, 'skills', 'local-only', 'SKILL.md'), '本机自己的\n')
+
+    const backend = fakeBackend({
+      'snapshot.json': JSON.stringify({ entries: [{ path: 'skills/cloud/SKILL.md' }] }),
+      'skills/cloud/SKILL.md': '云端的\n',
+    })
+    const service = createSyncService({ dshRoot: s.dshRoot, backend, profileName: 'web' })
+    const plan = await service.preparePull()
+    await service.applyPull(plan, { backupRoot: join(s.dshRoot, 'backups') })
+
+    assert.equal(
+      readFileSync(join(s.dshRoot, 'skills', 'local-only', 'SKILL.md'), 'utf8'),
+      '本机自己的\n',
+      '本机独有的技能不该被云端覆盖掉',
+    )
+  }
 })

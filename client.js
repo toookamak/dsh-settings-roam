@@ -106,6 +106,10 @@ window.__ModuleLoader__.load({
             label: '仓库地址',
             hint: '远程 Git 仓库地址。填上之后「推送」「拉取」才可用。',
           },
+          branch: {
+            label: '备份放在哪条分支',
+            hint: '同一个仓库可以放多个插件的备份，各占一条分支，免得互相覆盖。留空用 settings-roam。',
+          },
           profileName: {
             label: '同步哪个 profile',
             hint: '留空自动判断；本机有多个 profile 时必须填，否则会明确报错而不是猜。',
@@ -178,6 +182,10 @@ window.__ModuleLoader__.load({
           repoUrl: {
             label: 'Repository URL',
             hint: 'Remote Git repository. Push and Pull become available once this is set.',
+          },
+          branch: {
+            label: 'Branch for the backup',
+            hint: 'One repository can hold backups from several plugins, each on its own branch. Empty uses settings-roam.',
           },
           profileName: {
             label: 'Profile to sync',
@@ -303,12 +311,13 @@ window.__ModuleLoader__.load({
      */
     let hostContext = null
 
-    /** 我们自己声明的四个配置字段，用来在设置目录里认出本插件的那一条。 */
-    const FIELD_KEYS = ['repoUrl', 'profileName', 'exportRoot', 'importRoot']
+    /** 我们自己声明的配置字段，用来在设置目录里认出本插件的那一条。 */
+    const FIELD_KEYS = ['repoUrl', 'branch', 'profileName', 'exportRoot', 'importRoot']
 
     /** 表单里要画出来的字段，顺序即界面顺序。 */
     const FIELDS = [
       { key: 'repoUrl', copy: 'repoUrl' },
+      { key: 'branch', copy: 'branch' },
       { key: 'profileName', copy: 'profileName' },
       { key: 'exportRoot', copy: 'exportRoot' },
       { key: 'importRoot', copy: 'importRoot' },
@@ -940,7 +949,10 @@ window.__ModuleLoader__.load({
         try {
           const prepared = await request(spec.route, { step: 'prepare' })
           const summary = prepared.summary ?? {}
-          const count = (summary.add ?? 0) + (summary.modify ?? 0) + (summary.delete ?? 0)
+          // 刻意不算 delete：本机独有的项我们从不删除（那是「同步配置」与
+          // 「复制环境」的分界），把它算进「待拉取 N 项」会让用户以为点下去
+          // 会删掉本机的东西。推送侧同理：云端独有的项也不会被清掉。
+          const count = (summary.add ?? 0) + (summary.modify ?? 0)
           // 导入没有 diff 摘要（它不比对云端），用「会写几项」当计数。
           const total = kind === 'import'
             ? (prepared.overview?.total ?? 0)

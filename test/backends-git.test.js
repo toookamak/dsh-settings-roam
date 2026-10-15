@@ -1,11 +1,21 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, rmSync, existsSync } from 'node:fs'
+import { readFileSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { BACKEND_METHODS, assertBackend } from '../src/backends/index.js'
 import { createGitBackend } from '../src/backends/git.js'
 import { tmpDir } from '../support/tmp-dir.js'
+
+/** 在指定目录直接跑一条 git 命令，供测试布景用。 */
+function git(cwd, args, options = {}) {
+  try {
+    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  } catch (error) {
+    if (options.allowFailure === true) return ''
+    throw error
+  }
+}
 
 /** 建一个本地裸库当云端，不碰网络。 */
 function bareRepo() {
@@ -135,4 +145,87 @@ test('错误信息不泄露 URL 中的凭据', async () => {
     },
   )
   cleanup()
+})
+
+// ─── 分支：一个库放多个插件的备份，各占一条分支 ────────────────────────
+
+test('远端没有我们的分支时，建一条孤儿分支，而不是接在别人的提交上', async () => {
+  // 用户可能用一个私人库放多个插件的备份（各占一条分支）。
+  // 若把我们的分支建在 main 的提交之上，工作区里会混进别人的文件，
+  // 我们的清单就会收进不属于自己的东西。
+  const s = sandbox()
+  try {
+    // 先造一个「别人已经在用」的库：main 上有一个别的插件的文件。
+    git(s.repo, ['init', '--bare', '--quiet'])
+    const seed = join(s.root, 'seed')
+    mkdirSync(seed)
+    git(seed, ['init', '--quiet'])
+    git(seed, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'checkout', '-q', '-b', 'main'])
+    writeFileSync(join(seed, 'other-plugin.json'), '{}')
+    git(seed, ['add', '-A'])
+    git(seed, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', '别人的东西'])
+    git(seed, ['remote', 'add', 'origin', s.repo])
+    git(seed, ['push', '-q', 'origin', 'main'])
+
+    const backend = createGitBackend({ repoUrl: s.repo, workDir: s.work, branch: 'settings-roam' })
+    await backend.ensureReady()
+    await backend.writeFile('config/profile.patch.yml', 'ours\n')
+    await backend.push('第一次备份')
+
+    // 关键断言：我们的分支上只有我们自己的文件。
+    assert.equal(existsSync(join(s.work, 'other-plugin.json')), false,
+      '别的插件的文件不该出现在我们的工作区里')
+    assert.ok(existsSync(join(s.work, 'config', 'profile.patch.yml')))
+
+    const remoteRefs = git(s.repo, ['branch', '--list', '--format=%(refname:short)'])
+      .split('\n').map(line => line.trim()).filter(Boolean)
+    assert.ok(remoteRefs.includes('settings-roam'), `远端应当出现我们的分支，实际：${remoteRefs.join(',')}`)
+
+    // 我们的分支与 main 没有共同祖先，这正是「孤儿」的含义。
+    const base = git(s.repo, ['merge-base', 'main', 'settings-roam'], { allowFailure: true }).trim()
+    assert.equal(base, '', '我们的分支不该接在 main 的提交上')
+  } finally {
+    s.cleanup()
+  }
+})
+
+test('远端已有我们的分支时，直接用它，不重建', async () => {
+  const s = sandbox()
+  try {
+    git(s.repo, ['init', '--bare', '--quiet'])
+    const first = createGitBackend({ repoUrl: s.repo, workDir: s.work, branch: 'settings-roam' })
+    await first.ensureReady()
+    await first.writeFile('notes.md', '第一台机器写的\n')
+    await first.push('第一次')
+
+    // 换一个工作区克隆同一分支：应当拿到之前的内容。
+    const second = createGitBackend({ repoUrl: s.repo, workDir: join(s.root, 'work2'), branch: 'settings-roam' })
+    await second.ensureReady()
+    assert.equal(await second.readFile('notes.md'), '第一台机器写的\n',
+      '换一台机器应当能读到云端已有的内容')
+  } finally {
+    s.cleanup()
+  }
+})
+
+test('工作区已经在别的分支上时，切到我们自己的分支', async () => {
+  const s = sandbox()
+  try {
+    git(s.repo, ['init', '--bare', '--quiet'])
+    const backend = createGitBackend({ repoUrl: s.repo, workDir: s.work, branch: 'settings-roam' })
+    await backend.ensureReady()
+    await backend.writeFile('notes.md', 'ours\n')
+    await backend.push('第一次')
+
+    // 模拟「这个工作区上一次被别的分支用过」。
+    git(s.work, ['checkout', '-q', '-b', 'someone-else'])
+    writeFileSync(join(s.work, 'stranger.txt'), 'x')
+
+    await backend.ensureReady()
+    assert.equal(existsSync(join(s.work, 'stranger.txt')), false,
+      '切回自己的分支时，别的分支的文件不该留在工作区里')
+    assert.equal(await backend.readFile('notes.md'), 'ours\n')
+  } finally {
+    s.cleanup()
+  }
 })
