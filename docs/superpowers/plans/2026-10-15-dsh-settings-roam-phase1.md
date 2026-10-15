@@ -1966,6 +1966,379 @@ git commit -m "应用器：备份→合并→写入→写后回读校验，警�
 
 ---
 
+## 五 · 介质
+
+### Task 11: 后端抽象与 git 实现
+
+设计 §5.1 只给了一句话：云端是一份 git 仓库。接口边界由此任务定义。
+
+**为什么先定抽象再写 git**：第二期要加 WebDAV。若 git 的具体细节渗进服务层，第二期就得回头改服务层。抽象只有 5 个动作，成本低、收益明确。
+
+**为什么凭据交给系统 git**（设计 §6.2）：插件不读、不存、不传密钥，也不弹输入框。所有网络操作都通过子进程调用 `git`，由系统的 credential helper 处理认证。这样插件代码里**永远不会出现密钥**，密钥也不会进入插件的日志或错误信息。
+
+**Files:**
+- Create: `src/backends/index.js`
+- Create: `src/backends/git.js`
+- Test: `test/backends-git.test.js`
+
+- [ ] **Step 1: 写失败测试**
+
+创建 `test/backends-git.test.js`。全程只用本地裸库，**不碰网络**：
+
+```js
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { BACKEND_METHODS, assertBackend } from '../src/backends/index.js'
+import { createGitBackend } from '../src/backends/git.js'
+
+/** 建一个本地裸库当云端，不碰网络。 */
+function bareRepo() {
+  const dir = mkdtempSync(join(tmpdir(), 'roam-bare-'))
+  execFileSync('git', ['init', '--bare', '--quiet', dir])
+  return dir
+}
+
+function sandbox() {
+  const root = mkdtempSync(join(tmpdir(), 'roam-be-'))
+  return { root, work: join(root, 'work'), repo: bareRepo() }
+}
+
+test('后端接口只约定 5 个动作', () => {
+  assert.deepEqual(
+    [...BACKEND_METHODS].sort(),
+    ['ensureReady', 'pull', 'push', 'readFile', 'writeFile'],
+  )
+})
+
+test('接口校验：缺方法的对象被明确拒绝', () => {
+  assert.throws(() => assertBackend({ push: () => {} }), /缺少方法/)
+  const ok = {
+    ensureReady: async () => {}, pull: async () => {},
+    push: async () => {}, readFile: async () => {}, writeFile: async () => {},
+  }
+  assert.doesNotThrow(() => assertBackend(ok))
+})
+
+test('ensureReady 克隆空的裸库并落盘，可重复调用', async () => {
+  const { root, work, repo } = sandbox()
+  const backend = createGitBackend({ repoUrl: repo, workDir: work })
+  await backend.ensureReady()
+  assert.ok(existsSync(join(work, '.git')), '工作区应已就绪')
+  await backend.ensureReady()
+  assert.ok(existsSync(join(work, '.git')), '重复调用不应报错')
+  rmSync(root, { recursive: true })
+})
+
+test('writeFile 落盘并推送到裸库，内容可被再次克隆读到', async () => {
+  const { root, work, repo } = sandbox()
+  const backend = createGitBackend({ repoUrl: repo, workDir: work })
+  await backend.ensureReady()
+  await backend.writeFile('config/bundles.json', '{"official":["a"]}\n', '测试写入')
+  await backend.push('测试写入')
+
+  // 换一个工作区重新克隆，确认内容真的到了「云端」
+  const backend2 = createGitBackend({ repoUrl: repo, workDir: join(root, 'work2') })
+  await backend2.ensureReady()
+  assert.equal(await backend2.readFile('config/bundles.json'), '{"official":["a"]}\n')
+  rmSync(root, { recursive: true })
+})
+
+test('readFile 读不存在的路径返回 null，不抛错', async () => {
+  const { root, work, repo } = sandbox()
+  const backend = createGitBackend({ repoUrl: repo, workDir: work })
+  await backend.ensureReady()
+  assert.equal(await backend.readFile('config/nope.json'), null)
+  rmSync(root, { recursive: true })
+})
+
+test('writeFile 自动建立多级目录', async () => {
+  const { root, work, repo } = sandbox()
+  const backend = createGitBackend({ repoUrl: repo, workDir: work })
+  await backend.ensureReady()
+  await backend.writeFile('skills/demo/scripts/run.sh', '#!/bin/sh\n', '加技能')
+  assert.ok(existsSync(join(work, 'skills', 'demo', 'scripts', 'run.sh')))
+  rmSync(root, { recursive: true })
+})
+
+test('pull 把裸库上的新提交取回工作区', async () => {
+  const { root, work, repo } = sandbox()
+  const a = createGitBackend({ repoUrl: repo, workDir: work })
+  await a.ensureReady()
+  await a.writeFile('notes.md', 'first\n', '写记事本')
+  await a.push('写记事本')
+
+  const b = createGitBackend({ repoUrl: repo, workDir: join(root, 'work2') })
+  await b.ensureReady()
+  await b.writeFile('notes.md', 'second\n', '改记事本')
+  await b.push('改记事本')
+
+  await a.pull()
+  assert.equal(await a.readFile('notes.md'), 'second\n')
+  rmSync(root, { recursive: true })
+})
+
+test('无改动时 push 不产生空提交', async () => {
+  const { root, work, repo } = sandbox()
+  const backend = createGitBackend({ repoUrl: repo, workDir: work })
+  await backend.ensureReady()
+  await backend.writeFile('a.txt', 'x\n', '第一次')
+  await backend.push('第一次')
+  await assert.doesNotReject(() => backend.push('再推一次'))
+  rmSync(root, { recursive: true })
+})
+
+test('凭据边界：后端源码里不出现密钥相关字段', () => {
+  const src = readFileSync(new URL('../src/backends/git.js', import.meta.url), 'utf8')
+  for (const word of ['password', 'token', 'apiKey', 'api_key', 'secret']) {
+    assert.ok(!src.includes(word), `后端源码不应出现 ${word} —— 凭据交给系统 git`)
+  }
+})
+
+test('错误信息不泄露 URL 中的凭据', async () => {
+  const { root } = sandbox()
+  const backend = createGitBackend({
+    repoUrl: 'https://user:TOPSECRET@127.0.0.1:1/nonexistent.git',
+    workDir: join(root, 'w'),
+  })
+  await assert.rejects(
+    () => backend.ensureReady(),
+    (error) => {
+      assert.ok(!String(error.message).includes('TOPSECRET'), '错误信息不得包含凭据')
+      return true
+    },
+  )
+  rmSync(root, { recursive: true })
+})
+```
+
+- [ ] **Step 2: 运行测试，确认失败**
+
+运行：`node --test test/backends-git.test.js`
+预期：FAIL，`Cannot find module '../src/backends/index.js'`
+
+- [ ] **Step 3: 实现后端抽象**
+
+创建 `src/backends/index.js`：
+
+```js
+/**
+ * 后端抽象：云端介质的最小接口。
+ *
+ * 设计 §5.1 说云端是一份 git 仓库，第二期会加 WebDAV。这里有两点刻意的克制：
+ *
+ *   1. 只约定 5 个动作。接口越窄，第二期加介质时改动面越小。
+ *   2. 不认识「分支」「远端」「暂存区」这些 git 概念。服务层不该知道介质是什么。
+ *
+ * 凭据边界（设计 §6.2）：接口里没有任何与认证相关的参数。
+ * 认证属于只能由人配置的系统级设置，交给系统 git 的 credential helper。
+ */
+
+/** 后端必须实现的方法。顺序即典型调用顺序。 */
+export const BACKEND_METHODS = Object.freeze([
+  'ensureReady',
+  'pull',
+  'push',
+  'readFile',
+  'writeFile',
+])
+
+/**
+ * 校验一个对象是否满足后端接口。
+ * 缺少方法时立即失败——与其在同步中途报「undefined is not a function」，
+ * 不如在装配时就挡住。
+ * @param {object} backend
+ */
+export function assertBackend(backend) {
+  const missing = BACKEND_METHODS.filter(m => typeof backend?.[m] !== 'function')
+  if (missing.length > 0) {
+    throw new Error(`后端缺少方法：${missing.join(', ')}`)
+  }
+}
+```
+
+- [ ] **Step 4: 实现 git 后端**
+
+创建 `src/backends/git.js`：
+
+```js
+/**
+ * git 介质实现。
+ *
+ * 三条实现约束：
+ *
+ *   1. 一律走子进程调用系统 git，不自造 git 客户端。
+ *      认证因此全部落在系统 credential helper 上，插件代码里永不出现密钥。
+ *
+ *   2. 错误信息必须脱敏。git 的报错会把 URL 原样带出来，
+ *      而 URL 里可能含用户名与密码。所有对外抛出的消息都要先过 scrub()。
+ *
+ *   3. 无改动时不提交。云端仓库的历史被当作审计轨迹用，
+ *      塞满「无改动」的空提交会让这份轨迹失去意义。
+ */
+
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, renameSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { assertBackend } from './index.js'
+
+/**
+ * 抹掉文本里可能出现的凭据。
+ * 形如 scheme://user:pass@host 的部分，把 user:pass 换成掩码。
+ * @param {string} text
+ * @returns {string}
+ */
+export function scrub(text) {
+  return String(text).replace(/(\w+:\/\/)[^/@\s]+@/g, '$1***@')
+}
+
+/**
+ * 在指定工作区运行一条 git 命令。
+ * @param {string} cwd
+ * @param {string[]} args
+ * @param {{allowFailure?: boolean}} [options]
+ * @returns {string} stdout
+ */
+function git(cwd, args, options = {}) {
+  try {
+    return execFileSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+  } catch (error) {
+    if (options.allowFailure === true) return ''
+    const detail = scrub(error?.stderr || error?.message || '未知错误').trim()
+    throw new Error(`git ${args[0]} 失败：${detail}`)
+  }
+}
+
+/**
+ * 建一个 git 后端。
+ * @param {{repoUrl: string, workDir: string, branch?: string,
+ *          author?: {name: string, email: string}}} config
+ * @returns {object} 满足 BACKEND_METHODS 的后端
+ */
+export function createGitBackend(config) {
+  const { repoUrl, workDir, branch = 'main' } = config
+  const author = config.author ?? { name: 'dsh-settings-roam', email: 'roam@localhost' }
+  const safeUrl = scrub(repoUrl)
+
+  const isRepo = () => existsSync(join(workDir, '.git'))
+
+  /**
+   * 取工作区当前的实际分支名。
+   *
+   * 不硬编码分支名：系统的 init.defaultBranch 可能是 main 也可能是 master，
+   * 而克隆一个已有仓库时分支名由远端决定。硬编码会让 push 报
+   * 「源引用规格 main 没有匹配」——这个错误在实践中很难一眼看出成因。
+   */
+  function currentBranch() {
+    const name = git(workDir, ['symbolic-ref', '--short', 'HEAD']).trim()
+    return name === '' ? branch : name
+  }
+
+  function commit(message) {
+    // 先看有没有待提交的东西。没有就直接返回，避免空提交污染历史。
+    const status = git(workDir, ['status', '--porcelain']).trim()
+    if (status === '') return false
+    git(workDir, ['add', '-A'])
+    git(workDir, [
+      '-c', `user.name=${author.name}`,
+      '-c', `user.email=${author.email}`,
+      'commit', '--quiet', '-m', message,
+    ])
+    return true
+  }
+
+  const backend = {
+    /** 准备工作区：没有就克隆。可重复调用。 */
+    async ensureReady() {
+      if (isRepo()) return
+      mkdirSync(dirname(workDir), { recursive: true })
+      // 克隆到临时目录再改名：克隆中途失败时不会留下半个工作区，
+      // 否则下次启动会被 isRepo() 误判为已就绪。
+      const staging = `${workDir}.staging-${process.pid}-${Date.now()}`
+      try {
+        git(dirname(workDir), ['clone', '--quiet', '--branch', branch, repoUrl, staging])
+      } catch (error) {
+        // 空裸库没有 main 分支，直接 clone 会报错。这是「新建云端」的正常情况，
+        // 退到不指定分支的克隆。仍然失败才把原始错误交出（已脱敏）。
+        try {
+          git(dirname(workDir), ['clone', '--quiet', repoUrl, staging])
+        } catch {
+          rmSync(staging, { recursive: true, force: true })
+          throw error
+        }
+      }
+      rmSync(workDir, { recursive: true, force: true })
+      renameSync(staging, workDir)
+    },
+
+    /** 把远端的新提交取回工作区。 */
+    async pull() {
+      if (!isRepo()) throw new Error(`工作区未就绪：${workDir}`)
+      git(workDir, ['pull', '--quiet', '--no-rebase', 'origin', currentBranch()], {
+        allowFailure: true,
+      })
+    },
+
+    /**
+     * 提交并推送到远端。无改动时什么都不做。
+     * @returns {Promise<{committed: boolean}>}
+     */
+    async push(message) {
+      if (!isRepo()) throw new Error(`工作区未就绪：${workDir}`)
+      if (!commit(message)) return { committed: false }
+      git(workDir, ['push', '--quiet', 'origin', currentBranch()])
+      return { committed: true }
+    },
+
+    /**
+     * 读云端文件。不存在返回 null —— 调用方要区分「没有这份配置」与「读取失败」。
+     * @returns {Promise<string|null>}
+     */
+    async readFile(relPath) {
+      const abs = join(workDir, relPath)
+      if (!existsSync(abs)) return null
+      return readFileSync(abs, 'utf8')
+    },
+
+    /** 写云端文件并落盘到工作区（提交由 push 统一做）。 */
+    async writeFile(relPath, content) {
+      const abs = join(workDir, relPath)
+      mkdirSync(dirname(abs), { recursive: true })
+      writeFileSync(abs, content, 'utf8')
+    },
+
+    /** 供界面与错误信息使用，已脱敏。 */
+    describe() {
+      return `git 仓库 ${safeUrl}（分支 ${branch}）`
+    },
+  }
+
+  assertBackend(backend)
+  return backend
+}
+```
+
+- [ ] **Step 5: 运行测试，确认通过**
+
+运行：`node --test test/backends-git.test.js`
+预期：PASS，10 个测试通过
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add src/backends/index.js src/backends/git.js test/backends-git.test.js
+git commit -m "介质：后端抽象与 git 实现，凭据交给系统 git 且错误信息脱敏"
+```
+
+---
+
 ## 验证结论存档
 
 V1 验证的原始脚本与输出，正式化后归档于：
