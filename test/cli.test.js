@@ -1,11 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, mkdirSync, rmSync, existsSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { parseArgs, buildService } from '../bin/roam.js'
+import { tmpDir } from '../support/tmp-dir.js'
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'roam.js')
 
@@ -24,7 +24,7 @@ const PATCH = [
 
 /** 建一个与真实 DSH 布局同构的数据根目录。 */
 function sandbox(profiles = ['web']) {
-  const root = mkdtempSync(join(tmpdir(), 'roam-cli-'))
+  const root = tmpDir('cli-')
   const dshRoot = join(root, '.dsh')
   for (const name of profiles) {
     const dir = join(dshRoot, 'profiles', name)

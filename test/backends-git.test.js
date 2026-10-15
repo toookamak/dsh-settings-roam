@@ -1,21 +1,21 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { BACKEND_METHODS, assertBackend } from '../src/backends/index.js'
 import { createGitBackend } from '../src/backends/git.js'
+import { tmpDir } from '../support/tmp-dir.js'
 
 /** 建一个本地裸库当云端，不碰网络。 */
 function bareRepo() {
-  const dir = mkdtempSync(join(tmpdir(), 'roam-bare-'))
+  const dir = tmpDir('bare-')
   execFileSync('git', ['init', '--bare', '--quiet', dir])
   return dir
 }
 
 function sandbox() {
-  const root = mkdtempSync(join(tmpdir(), 'roam-be-'))
+  const root = tmpDir('be-')
   const repo = bareRepo()
   return {
     root,

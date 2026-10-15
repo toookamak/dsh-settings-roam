@@ -96,6 +96,9 @@ export function createSyncService(config) {
    */
   const explicitProfile = config.profileName ?? null
 
+  /** 用户在设置页指定的导出目录；留空时用数据根目录下的默认位置。 */
+  const configuredExportRoot = config.exportRoot ?? null
+
   /** 解析出本次操作的目标 profile 名。 */
   function resolveProfileName() {
     if (explicitProfile !== null) return explicitProfile
@@ -548,7 +551,9 @@ export function createSyncService(config) {
      * @returns {string}
      */
     defaultExportRoot() {
-      return join(dshRoot, 'settings-roam', 'export')
+      // 用户在设置页填了导出目录就用它，否则落在数据根目录下。
+      // 落在数据根目录下是刻意的：它天然属于这台机器，不会被误同步。
+      return configuredExportRoot ?? join(dshRoot, 'settings-roam', 'export')
     },
   }
 }

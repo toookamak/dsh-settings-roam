@@ -1,12 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, statSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, chmodSync, statSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { scanSkills, copySkills, listSkillNames } from '../src/skills.js'
+import { tmpDir } from '../support/tmp-dir.js'
 
 function makeSkillDir() {
-  const root = mkdtempSync(join(tmpdir(), 'roam-skills-'))
+  const root = tmpDir('skills-')
   const a = join(root, 'agent-browser')
   mkdirSync(join(a, 'templates'), { recursive: true })
   writeFileSync(join(a, 'SKILL.md'), '# agent-browser\n')
@@ -38,7 +38,7 @@ test('扫描记录每个文件的模式，尤其是可执行位', () => {
 
 test('复制技能保留可执行位', () => {
   const root = makeSkillDir()
-  const dest = mkdtempSync(join(tmpdir(), 'roam-dest-'))
+  const dest = tmpDir('dest-')
   copySkills(root, ['agent-browser'], dest)
   const copied = join(dest, 'agent-browser', 'templates', 'run.sh')
   const mode = statSync(copied).mode & 0o777
@@ -48,12 +48,12 @@ test('复制技能保留可执行位', () => {
 })
 
 test('技能含二进制资源时不破坏内容', () => {
-  const root = mkdtempSync(join(tmpdir(), 'roam-bin-'))
+  const root = tmpDir('bin-')
   const s = join(root, 'screenshot')
   mkdirSync(join(s, 'assets'), { recursive: true })
   const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe])
   writeFileSync(join(s, 'assets', 'shot.png'), bytes)
-  const dest = mkdtempSync(join(tmpdir(), 'roam-dest2-'))
+  const dest = tmpDir('dest2-')
   copySkills(root, ['screenshot'], dest)
   const after = statSync(join(dest, 'screenshot', 'assets', 'shot.png'))
   assert.equal(after.size, bytes.length, '二进制长度不变')

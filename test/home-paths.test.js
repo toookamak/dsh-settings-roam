@@ -1,8 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { homedir, tmpdir } from 'node:os'
+import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, existsSync } from 'node:fs'
+import { mkdirSync, writeFileSync, rmSync, readdirSync, existsSync } from 'node:fs'
 import {
   DSH_HOME_ENV,
   defaultDshHome,
@@ -10,6 +10,7 @@ import {
   resolveDshHome,
   dshHomePath,
 } from '../src/home-paths.js'
+import { tmpDir } from '../support/tmp-dir.js'
 
 test('默认根目录是 ~/.dsh', () => {
   assert.equal(defaultDshHome(), join(homedir(), '.dsh'))
@@ -110,7 +111,7 @@ test('profilePatchPath 拼出官方布局的路径', async () => {
 
 test('listProfiles 只列目录，不列文件，且结果稳定有序', async () => {
   const { listProfiles } = await import('../src/home-paths.js')
-  const root = mkdtempSync(join(tmpdir(), 'roam-prof-'))
+  const root = tmpDir('prof-')
   mkdirSync(join(root, 'profiles', 'web'), { recursive: true })
   mkdirSync(join(root, 'profiles', 'desktop'), { recursive: true })
   mkdirSync(join(root, 'profiles', 'alpha'), { recursive: true })
@@ -123,7 +124,7 @@ test('listProfiles 只列目录，不列文件，且结果稳定有序', async (
 
 test('没有 profiles 目录时返回空数组，不抛错', async () => {
   const { listProfiles } = await import('../src/home-paths.js')
-  const root = mkdtempSync(join(tmpdir(), 'roam-prof2-'))
+  const root = tmpDir('prof2-')
 
   assert.deepEqual(listProfiles(root, { readdirSync, existsSync }), [])
   assert.deepEqual(listProfiles(join(root, 'nonexistent'), { readdirSync, existsSync }), [])

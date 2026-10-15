@@ -1,10 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { applyPatchFile, verifyWriteBack, rollbackApplied } from '../src/apply.js'
 import { parsePatchList } from '../src/yaml-loader.js'
+import { tmpDir } from '../support/tmp-dir.js'
 
 const REMOTE = [
   '- id: llm-pi-ai',
@@ -27,7 +27,7 @@ const LOCAL = [
 ].join('\n')
 
 function sandbox() {
-  const root = mkdtempSync(join(tmpdir(), 'roam-apply-'))
+  const root = tmpDir('apply-')
   const file = join(root, 'cordis.patch.yml')
   writeFileSync(file, LOCAL)
   return { root, file }
@@ -79,7 +79,7 @@ test('应用前自动备份，回退可还原', async () => {
 })
 
 test('目标文件不存在时也能建立（新机器场景）', () => {
-  const root = mkdtempSync(join(tmpdir(), 'roam-new-'))
+  const root = tmpDir('new-')
   const file = join(root, 'cordis.patch.yml')
   const result = applyPatchFile({ targetFile: file, sharedRows: parsePatchList(REMOTE) })
   assert.deepEqual(result.warnings, [])

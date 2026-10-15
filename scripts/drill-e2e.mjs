@@ -145,9 +145,22 @@ function commitLog() {
   }
 }
 
+/**
+ * 某台机器的 profile 配置路径。
+ *
+ * 刻意用 DSH 的真实布局 profiles/<名>/cordis.patch.yml，而不是数据根目录下。
+ * 演练第一版把配置直接放在数据根目录，与真实布局不同构，于是
+ * 「按 profile 解析路径」这个改动在演练里完全测不出来——而它恰恰是
+ * 让工具对真实数据读到 0 个条目的那处缺陷。fixture 必须与真实布局同构。
+ */
+function patchPathOf(dshRoot) {
+  return join(dshRoot, 'profiles', 'web', 'cordis.patch.yml')
+}
+
 function setupMachine(dir, patchContent, skills = {}) {
   mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, 'cordis.patch.yml'), patchContent)
+  mkdirSync(dirname(patchPathOf(dir)), { recursive: true })
+  writeFileSync(patchPathOf(dir), patchContent)
   for (const [name, files] of Object.entries(skills)) {
     const skillDir = join(dir, 'skills', name)
     mkdirSync(skillDir, { recursive: true })
@@ -168,7 +181,7 @@ function serviceFor(dshRoot, repoUrl) {
 }
 
 function rowsOf(dshRoot) {
-  return parsePatchList(readFileSync(join(dshRoot, 'cordis.patch.yml'), 'utf8'))
+  return parsePatchList(readFileSync(patchPathOf(dshRoot), 'utf8'))
 }
 
 /**
@@ -269,7 +282,7 @@ try {
   check('B 的 webserver 仍是自己的地址 10.0.0.9',
     bAfter.webserver?.config?.host === '10.0.0.9')
   check('A 的地址没有漂到 B',
-    !readFileSync(join(machineB, 'cordis.patch.yml'), 'utf8').includes('10.0.0.7'),
+    !readFileSync(patchPathOf(machineB), 'utf8').includes('10.0.0.7'),
     '核心命题：本机地址不跨机器')
 
   const view = report
@@ -282,7 +295,7 @@ try {
   check('报告给的备份路径就是备份本身，不是它的父目录',
     view.backupPath !== join(machineB, 'backup'))
   check('备份路径里真的找得到拉取前的副本',
-    view.backupPath !== '' && existsSync(join(view.backupPath, join(machineB, 'cordis.patch.yml'))))
+    view.backupPath !== '' && existsSync(join(view.backupPath, join(machineB, 'profiles', 'web', 'cordis.patch.yml'))))
 
   check('报告提示需要重启', view.needsRestart === true)
 
@@ -319,7 +332,7 @@ try {
   // 注意期望值是**拉取前**的状态。备份存的是拉取前那份，回退的意义就是撤销拉取。
   // 演练第二版误把「拉取后」当期望值，白报了一次失败——回退正确反而是它判错。
   const { restoreFromBackup } = await import('../src/backup.js')
-  const targetFile = join(machineB, 'cordis.patch.yml')
+  const targetFile = patchPathOf(machineB)
   const afterPullText = readFileSync(targetFile, 'utf8')
   writeFileSync(targetFile, '# 模拟被写坏\n')
   const rolled = restoreFromBackup(

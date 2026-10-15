@@ -1,10 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, mkdirSync, rmSync, readFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { createSyncService } from '../src/service.js'
 import { parsePatchList } from '../src/yaml-loader.js'
+import { tmpDir } from '../support/tmp-dir.js'
 
 const PATCH = [
   '- id: llm-pi-ai',
@@ -34,7 +34,7 @@ function fakeBackend(initial = {}) {
 }
 
 function sandbox() {
-  const root = mkdtempSync(join(tmpdir(), 'roam-svc-'))
+  const root = tmpDir('svc-')
   const dshRoot = join(root, '.dsh')
   mkdirSync(dshRoot, { recursive: true })
   // 真实布局：配置在 profiles/<名>/ 下，不在数据根目录下。
@@ -553,7 +553,7 @@ test('显式指定 profileName 时按指定的读，不受其它 profile 干扰'
 })
 
 test('一个 profile 都没有时给出可行动的说明', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'roam-svc-empty-'))
+  const root = tmpDir('svc-empty-')
   const dshRoot = join(root, '.dsh')
   mkdirSync(dshRoot, { recursive: true })
   const service = createSyncService({ backend: fakeBackend(), dshRoot })

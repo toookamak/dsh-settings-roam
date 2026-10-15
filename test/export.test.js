@@ -1,12 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join, isAbsolute } from 'node:path'
 import { exportForReview, safeRelPath, EXPORT_DIRNAME } from '../src/export.js'
+import { tmpDir } from '../support/tmp-dir.js'
 
 function sandbox() {
-  const root = mkdtempSync(join(tmpdir(), 'roam-export-'))
+  const root = tmpDir('export-')
   return { root, exportRoot: join(root, EXPORT_DIRNAME) }
 }
 
