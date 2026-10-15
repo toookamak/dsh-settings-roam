@@ -37,6 +37,7 @@ const USAGE = `设置漫游 —— 把一台机器的 DSH 配置搬到另一台
 
 选项：
   --dsh-home <路径>   覆盖 DSH 数据根目录（默认 $DSH_HOME 或 ~/.dsh）
+  --profile <名字>    指定要同步哪个 profile（默认自动判断唯一的一个）
   --repo <地址>       云端 git 仓库地址（未配置时 export 仍可用）
   --json              以 JSON 输出，便于脚本处理
 
@@ -54,8 +55,10 @@ export function parseArgs(argv) {
     if (arg === '--json') options.json = true
     else if (arg === '--dsh-home') options.dshHome = argv[++i]
     else if (arg === '--repo') options.repo = argv[++i]
+    else if (arg === '--profile') options.profile = argv[++i]
     else if (arg.startsWith('--dsh-home=')) options.dshHome = arg.slice('--dsh-home='.length)
     else if (arg.startsWith('--repo=')) options.repo = arg.slice('--repo='.length)
+    else if (arg.startsWith('--profile=')) options.profile = arg.slice('--profile='.length)
     else if (arg === '-h' || arg === '--help') options.help = true
     else rest.push(arg)
   }
@@ -74,7 +77,14 @@ export function buildService(options = {}) {
       repoUrl: options.repo,
       workDir: join(dshRoot, 'settings-roam', 'work'),
     })
-  return { dshRoot, service: createSyncService({ dshRoot, backend }) }
+  return {
+    dshRoot,
+    service: createSyncService({
+      dshRoot,
+      backend,
+      profileName: options.profile ?? null,
+    }),
+  }
 }
 
 async function cmdInspect({ service, dshRoot }, options) {

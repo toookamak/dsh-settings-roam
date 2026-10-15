@@ -40,6 +40,9 @@
   "scripts": {
     "test": "node --test"
   },
+  "dependencies": {
+    "js-yaml": "^4.3.2"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",
     "react": "^18.3.1",
@@ -52,7 +55,6 @@
   "devDependencies": {
     "@deepseek-ai/cordis-plugin-include": "^1.0.10-alpha.1",
     "@deepseek-ai/dsh-app-boot": "^0.2.1-alpha.2",
-    "js-yaml": "^4.3.2",
     "@deepseek-ai/schemastery": "^3.18.5-alpha.2"
   },
   "peerDependenciesMeta": {

@@ -23,6 +23,7 @@
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join, dirname, relative, isAbsolute } from 'node:path'
 
 /**
@@ -85,19 +86,34 @@ export function safeRelPath(entryPath) {
   return parts.length === 0 ? '_' : join(...parts)
 }
 
+/**
+ * 内容校验值。
+ *
+ * 用完整 sha256 而不是截断值：这个值要承担「这份包有没有被动过」的判断，
+ * 而基于它的动作是把文件写到用户机器上，属于安全边界，不是展示字段。
+ * 快照清单里用的是截断值——那边只做「变了没有」的比对，不承担写入决策。
+ *
+ * @param {string} content
+ * @returns {string}
+ */
+export function hashContent(content) {
+  return createHash('sha256').update(content, 'utf8').digest('hex')
+}
+
 function buildManifest(input, written) {
   return {
     schemaVersion: 1,
     generatedAt: input.generatedAt ?? null,
     generatedBy: input.generatedBy ?? 'unknown',
     total: written.length,
-    files: written.map(path => ({
-      path,
-      bytes: Buffer.byteLength(
-        input.files.find(f => f.path === path)?.content ?? '',
-        'utf8',
-      ),
-    })),
+    files: written.map(path => {
+      const content = input.files.find(f => f.path === path)?.content ?? ''
+      return {
+        path,
+        bytes: Buffer.byteLength(content, 'utf8'),
+        sha256: hashContent(content),
+      }
+    }),
     diff: input.summary ?? null,
   }
 }
