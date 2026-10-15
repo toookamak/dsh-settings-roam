@@ -17,11 +17,15 @@
  */
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = resolve(here, '..')
+
+/** 本插件的包名。载荷层与组合树里都用它做断言，写一处免得对不上。 */
+const PLUGIN_NAME = '@toookamak/dsh-settings-roam'
 
 /** DSH 检出位置。可由环境变量覆盖，便于在别处运行。 */
 const dshRepo = process.env.DSH_REPO ?? '/home/tokamak/dev/tools/deepseek-harness'
@@ -36,6 +40,24 @@ if (!existsSync(cliBin)) {
 const home = join('/tmp', `roam-verify-${process.pid}`)
 const profile = 'roamverify'
 const profileDir = join(home, 'profiles', profile)
+
+/**
+ * 向系统要一个当下空闲的端口。
+ *
+ * 让 DSH 自己挑是不行的：它的缺省值是 3080，本机常常已经有实例占着。
+ * @returns {Promise<number>} 可用的端口号
+ */
+function freePort() {
+  return new Promise((resolvePromise, reject) => {
+    const server = createServer()
+    server.on('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      const port = typeof address === 'object' && address !== null ? address.port : 0
+      server.close(() => { resolvePromise(port) })
+    })
+  })
+}
 
 function run(args, options = {}) {
   return spawnSync(process.execPath, [cliBin, ...args], {
@@ -55,9 +77,16 @@ function run(args, options = {}) {
  * @param {number} waitMs - 最长等待时间
  * @returns {string} 合并后的输出
  */
-function bootAndCapture(waitMs = 45_000, required = [], probe = null) {
+function bootAndCapture(waitMs = 45_000, required = [], probe = null, port = null) {
   return new Promise((resolvePromise) => {
-    const child = spawn(process.execPath, [cliBin, '--profile', profile], {
+    // 端口必须自己挑一个空闲的再显式传进去。不传时 DSH 会落到默认的 3080
+    // （packages/bundle/web-app/cordis.patch.yml:184 `ctx.webStartup.port ?? 3080`），
+    // 而本机可能正有一个真实实例在监听同一个端口——验收请求就会打到那个实例上：
+    // 插件当然「不存在」，甚至可能往用户的真实数据根里写导出文件。
+    // 这类失败看起来像插件坏了，其实是脚本端口撞了。
+    const args = [cliBin, '--profile', profile]
+    if (port !== null) args.push('--port', String(port))
+    const child = spawn(process.execPath, args, {
       env: { ...process.env, DSH_HOME: home, ROAM_PROBE_OUT: join(home, "roam-probe.log") },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -143,19 +172,28 @@ try {
 
   // 2. 把插件装进去。用 link: 指向本仓库，装的是当前工作区而不是发布版——
   //    这正是我们要验收的对象。
-  const manifestPath = join(profileDir, 'package.json')
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
-  manifest.dependencies = {
-    ...(manifest.dependencies ?? {}),
-    '@toookamak/dsh-settings-roam': `link:${pluginRoot}`,
-  }
-  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
-
+  //
+  //    刻意**不**先手写 manifest 里的依赖：`dsh plugin add` 是在
+  //    「依赖名在装之前不存在」的前提下才把它追加进 dsh.profile.bundles
+  //    （packages/boot/plugin-manager/src/operations.ts:93
+  //    `if (beforeDeps.has(name)) continue`）。先手写一行 link: 会让这一步
+  //    被跳过，插件于是既不进 bundles 也不进组合树——一个由验收脚本自己
+  //    制造的假故障，看起来却像插件坏了。
   const patched = run(['plugin', '--profile', profile, 'add', pluginRoot])
   if (patched.status !== 0) {
     console.error('安装插件失败：')
     console.error(patched.stderr || patched.stdout)
     process.exit(2)
+  }
+
+  // 它必须作为 profile 层被登记。这是「插件的 cordis.patch.yml 会被组合进来」
+  // 的前提；只登记依赖而不登记 bundle，装载期什么都不会发生。
+  const manifestPath = join(profileDir, 'package.json')
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  const registeredBundles = manifest.dsh?.profile?.bundles ?? []
+  if (!registeredBundles.includes(PLUGIN_NAME)) {
+    console.error(`✗ 插件没有被登记为 profile 层（dsh.profile.bundles）：${JSON.stringify(registeredBundles)}`)
+    failed = true
   }
 
   // 3. 在 profile 的 patch 层插入条目。
@@ -212,11 +250,12 @@ try {
     '',
   ].join('\n'))
 
+  // 只插探针：本插件声明了 dsh.bundle.patch，`plugin add` 已把它列进
+  // dsh.profile.bundles，自带 patch 会被组合进来。再插一条会造成同 id 重复插入，
+  // 组合取第一条（没有 config 的那份），设置页写入就会被判成「被别处覆盖」而失败。
   writeFileSync(join(profileDir, 'cordis.patch.yml'), [
     '# 由 verify-load.mjs 生成，仅用于验收。',
     '- insert:',
-    '    - id: dsh-settings-roam',
-    "      name: '@toookamak/dsh-settings-roam'",
     '    - id: roam-probe',
     "      name: 'roam-probe'",
     '',
@@ -283,7 +322,7 @@ try {
     })
     routeProbe.exportStatus = exp.status
     routeProbe.exportBody = await exp.json().catch(() => null)
-  })
+  }, await freePort())
 
   if (/did not activate/.test(output)) {
     console.error('✗ 插件未能激活：')
