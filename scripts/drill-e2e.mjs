@@ -347,6 +347,61 @@ try {
   check('回退后 B 的公共条目恢复为拉取前那份（只剩 stale-provider）',
     entryOf(machineB, 'llm-pi-ai')?.config?.providers?.['opencode-go'] === undefined)
 
+  // ---------- Step 5: 本地包导入（第二阶段：不联网也能回填）----------
+  //
+  // 这一段刻意不复用 A/B 与裸库：第二阶段要证的正是「连不上 git 也能恢复」。
+  // 用一台全新机器 C，只给它一个目录里的导出包，看它能不能把配置与技能回填，
+  // 同时保住自己的本机项。
+  console.log('\n=== Step 5 本地包导入（第二阶段）===')
+  const machineC = join(root, 'machine-c')
+  const packageRoot = join(root, 'carried-package')
+
+  setupMachine(machineC, PATCH_B, {})
+
+  const svcA3 = serviceFor(machineA, repo)
+  const packPlan = await svcA3.preparePush({
+    generatedBy: 'machine-a',
+    exportRoot: packageRoot,
+    bundles: [],
+  })
+  const packageDir = packPlan.exported.exportPath
+  check('导出包落到磁盘上', existsSync(join(packageDir, 'manifest.json')))
+
+  const svcC = createSyncService({
+    dshRoot: machineC,
+    // 刻意不配后端：第二阶段要证的就是「没有云端也能恢复」。
+    // createSyncService 允许 backend 缺席（装配时不构造），这是缺陷 2 修出来的行为。
+  })
+
+  const beforeCPatch = readFileSync(patchPathOf(machineC), 'utf8')
+
+  // 5a. 预览绝不能动磁盘
+  const importPlan = await svcC.prepareImport({ packageDir })
+  check('导入预览不改本机配置文件',
+    readFileSync(patchPathOf(machineC), 'utf8') === beforeCPatch)
+  check('导入预览说清了会写回什么',
+    importPlan.patchRows.some(r => r.id === 'llm-pi-ai'),
+    `实际：${importPlan.patchRows.map(r => r.id).join(', ')}`)
+  check('导入预览说清了什么不写回', importPlan.refused.length > 0,
+    `不写回：${importPlan.refused.map(r => r.name ?? r.path).join(', ')}`)
+  check('导入不需要云端仓库也能算出计划', svcC.isConfigured() === false)
+
+  // 5b. 确认后才写
+  const importReport = await svcC.applyImport(importPlan, { backupRoot: join(machineC, 'backups') })
+
+  const cCrois = rowsOf(machineC)
+  check('公共配置被写了进来',
+    cCrois.find(r => r.id === 'llm-pi-ai')?.config?.providers?.['opencode-go'] !== undefined)
+  check('机器 C 自己的监听地址没被换掉',
+    cCrois.find(r => r.id === 'webserver')?.config?.host === '10.0.0.9')
+  check('机器 A 的地址绝没有被带过来',
+    !readFileSync(patchPathOf(machineC), 'utf8').includes('10.0.0.7'), '这是本项目要解决的根本问题')
+  check('技能文件被重建', existsSync(join(machineC, 'skills', 'demo-skill', 'SKILL.md')))
+  check('导入前先备份了（有退路）',
+    typeof importReport.backupPath === 'string' && importReport.backupPath !== '')
+  check('报告提示本机偏好没有随行',
+    (importReport.skipped ?? []).some(item => /本机|不会/.test(item.explanation ?? '')))
+
   // ---------- 汇总 ----------
   const failed = checks.filter(c => !c.passed)
   console.log(`\n=== 汇总：${checks.length - failed.length}/${checks.length} 通过 ===`)

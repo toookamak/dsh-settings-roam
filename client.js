@@ -73,6 +73,7 @@ window.__ModuleLoader__.load({
     const Input = UI.Input ?? 'input'
     const StateDot = UI.StateDot ?? null
     const IconExport = UI.IconDownloadOutlineRegular ?? null
+    const IconImport = UI.IconFolderOpenOutlineRegular ?? null
     const IconPull = UI.IconRefreshOutlineRegular ?? null
     const IconPush = UI.IconRightUpOutlineRegular ?? null
     const IconOpen = UI.IconFolderOpenOutlineRegular ?? null
@@ -114,8 +115,8 @@ window.__ModuleLoader__.load({
             hint: '「导出到文件」把要备份的内容写到这里；留空用默认目录。',
           },
           importRoot: {
-            label: '导入目录（尚未生效）',
-            hint: '尚未生效：第二阶段才会读取。现在填了不会有任何效果，可以先放着。',
+            label: '导入目录',
+            hint: '「导入」去这个目录里找之前导出的包；留空就用上面的导出目录。',
           },
         },
         status: {
@@ -132,16 +133,20 @@ window.__ModuleLoader__.load({
           export: '正在把要备份的内容写到文件…',
           pushPrepare: '正在算要推送什么…',
           pullPrepare: '正在算云端差异…',
+          importPrepare: '正在核对导入包…',
+          importConfirm: '正在写回本机…',
           pushConfirm: '正在推送…',
           pullConfirm: '正在应用…',
         },
         action: {
           export: '导出到文件',
+          import: '导入',
           pull: '拉取',
           push: '推送',
           confirm: '确认',
           confirmPush: '确认推送',
           confirmPull: '确认拉取',
+          confirmImport: '确认导入',
           cancel: '取消',
           copy: '复制路径',
           copied: '已复制',
@@ -149,6 +154,7 @@ window.__ModuleLoader__.load({
         pending: {
           push: '将推送 {files} 个文件，其中 {n} 项与云端不同。确认后写入云端。',
           pull: '云端有 {remote} 条配置，其中 {n} 项与本机不同。确认后改动本机。',
+          import: '将写回 {n} 项，本机原有的监听地址、主题等不受影响。确认后改动本机。',
         },
         overview: { title: '这次同步了什么' },
         skips: { title: '这些项留在了本机' },
@@ -182,8 +188,8 @@ window.__ModuleLoader__.load({
             hint: 'Export to file writes the backup here. Empty uses the default directory.',
           },
           importRoot: {
-            label: 'Import directory (not active yet)',
-            hint: 'Not active yet — read in phase two. Setting it now has no effect.',
+            label: 'Import directory',
+            hint: 'Import looks here for a previously exported package; empty uses the export directory above.',
           },
         },
         status: {
@@ -200,16 +206,20 @@ window.__ModuleLoader__.load({
           export: 'Writing the backup to disk…',
           pushPrepare: 'Working out what would be pushed…',
           pullPrepare: 'Comparing with the cloud…',
+          importPrepare: 'Checking the package…',
+          importConfirm: 'Writing back to this machine…',
           pushConfirm: 'Pushing…',
           pullConfirm: 'Applying…',
         },
         action: {
           export: 'Export to file',
+          import: 'Import',
           pull: 'Pull',
           push: 'Push',
           confirm: 'Confirm',
           confirmPush: 'Confirm push',
           confirmPull: 'Confirm pull',
+          confirmImport: 'Confirm import',
           cancel: 'Cancel',
           copy: 'Copy path',
           copied: 'Copied',
@@ -232,8 +242,56 @@ window.__ModuleLoader__.load({
     const ROUTES = {
       status: '/api/settings-roam.status',
       export: '/api/settings-roam.export',
+      import: '/api/settings-roam.import',
       push: '/api/settings-roam.push',
       pull: '/api/settings-roam.pull',
+    }
+
+    /**
+     * 三种「预览 → 确认」动作的差异表。
+     *
+     * 放在这里而不是散在流程里，是因为这三种动作的骨架完全相同，
+     * 只有「发到哪、说什么、确认按钮叫什么」不同。散着写就会有三份
+     * 各自慢慢走样的流程，而它们本该永远一致。
+     */
+    const KIND_SPEC = {
+      push: {
+        route: ROUTES.push,
+        busyPrepare: 'busy.pushPrepare',
+        busyConfirm: 'busy.pushConfirm',
+        confirmLabel: 'action.confirmPush',
+        pending: 'pending.push',
+      },
+      pull: {
+        route: ROUTES.pull,
+        busyPrepare: 'busy.pullPrepare',
+        busyConfirm: 'busy.pullConfirm',
+        confirmLabel: 'action.confirmPull',
+        pending: 'pending.pull',
+      },
+      import: {
+        route: ROUTES.import,
+        busyPrepare: 'busy.importPrepare',
+        busyConfirm: 'busy.importConfirm',
+        confirmLabel: 'action.confirmImport',
+        pending: 'pending.import',
+      },
+    }
+
+    /**
+     * 把「不写回的项」统一成列表能显示的形态。
+     *
+     * 两个来源的字段名不一样：导入计划里叫 path（按文件说），
+     * 报告里叫 name（按条目说）。界面只认一个，否则会出现一行空白。
+     * @param {Array<object>|undefined} items
+     * @returns {Array<{name: string, explanation: string}>}
+     */
+    function normalizeRefused(items) {
+      if (!Array.isArray(items)) return []
+      return items.map(item => ({
+        name: item?.name ?? item?.path ?? '',
+        explanation: item?.explanation ?? '',
+      }))
     }
 
     /**
@@ -713,6 +771,11 @@ window.__ModuleLoader__.load({
           ),
           h(
             Button,
+            { variant: 'outline', size: 'md', icon: IconImport, disabled, onClick: () => actions?.onImport?.() },
+            t('action.import'),
+          ),
+          h(
+            Button,
             { variant: 'outline', size: 'md', icon: IconPull, disabled: !cloudReady, onClick: () => actions?.onPull?.() },
             t('action.pull'),
           ),
@@ -864,28 +927,37 @@ window.__ModuleLoader__.load({
         }
       }, [t])
 
-      /** 统一处理「预览 → 确认」两段。 */
+      /**
+       * 统一处理「预览 → 确认」两段。
+       *
+       * 三种动作（推送 / 拉取 / 导入）走同一条骨架：算计划、把计划摆给用户看、
+       * 等确认再执行。差别只在路由、文案与「要看哪些数字」，所以按 kind 取表，
+       * 而不是写三份几乎一样的流程——写三份就会有三处各自慢慢写歪的机会。
+       */
       const begin = React.useCallback(async (kind) => {
-        const route = kind === 'push' ? ROUTES.push : ROUTES.pull
-        const textKey = kind === 'push' ? 'busy.pushPrepare' : 'busy.pullPrepare'
-        setState(current => ({ kind: 'busy', text: t(textKey), status: current.status }))
+        const spec = KIND_SPEC[kind]
+        setState(current => ({ kind: 'busy', text: t(spec.busyPrepare), status: current.status }))
         try {
-          const prepared = await request(route, { step: 'prepare' })
+          const prepared = await request(spec.route, { step: 'prepare' })
           const summary = prepared.summary ?? {}
           const count = (summary.add ?? 0) + (summary.modify ?? 0) + (summary.delete ?? 0)
+          // 导入没有 diff 摘要（它不比对云端），用「会写几项」当计数。
+          const total = kind === 'import'
+            ? (prepared.overview?.total ?? 0)
+            : count
           setState(current => ({
             // 预览之后停在「待确认」，不能是「已完成」——那一瞬间什么都还没写。
             kind: 'review',
-            count,
+            count: total,
             status: current.status,
             overview: prepared.overview ?? null,
-            skipped: prepared.skipped ?? [],
+            skipped: normalizeRefused(kind === 'import' ? prepared.refused : prepared.skipped),
             pending: {
               kind,
               token: prepared.token,
-              confirmLabel: kind === 'push' ? t('action.confirmPush') : t('action.confirmPull'),
-              text: t(kind === 'push' ? 'pending.push' : 'pending.pull', {
-                n: count,
+              confirmLabel: t(spec.confirmLabel),
+              text: t(spec.pending, {
+                n: total,
                 files: prepared.files?.length ?? 0,
                 remote: prepared.remoteCount ?? 0,
               }),
@@ -899,20 +971,20 @@ window.__ModuleLoader__.load({
       const confirm = React.useCallback(async () => {
         const pending = state.pending
         if (!pending) return
+        const spec = KIND_SPEC[pending.kind]
         setState(current => ({
           kind: 'busy',
-          text: t(pending.kind === 'push' ? 'busy.pushConfirm' : 'busy.pullConfirm'),
+          text: t(spec.busyConfirm),
           status: current.status,
         }))
         try {
-          const route = pending.kind === 'push' ? ROUTES.push : ROUTES.pull
-          const done = await request(route, { step: 'confirm', token: pending.token })
+          const done = await request(spec.route, { step: 'confirm', token: pending.token })
           setState(current => ({
             kind: 'done',
             text: t('result.done'),
             status: current.status,
             overview: done.overview ?? state.overview ?? null,
-            skipped: done.report?.skipped ?? [],
+            skipped: normalizeRefused(done.report?.skipped),
           }))
         } catch (error) {
           setState(current => ({ kind: 'error', message: error.message, status: current.status }))
@@ -936,6 +1008,7 @@ window.__ModuleLoader__.load({
         copied,
         onSaved,
         onExport: beginExport,
+        onImport: () => begin('import'),
         onPush: () => begin('push'),
         onPull: () => begin('pull'),
         onConfirm: confirm,

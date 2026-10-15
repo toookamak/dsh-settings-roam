@@ -56,6 +56,42 @@ export function buildPushOverview(plan, options = {}) {
 }
 
 /**
+ * 从导入计划构建概述（确认之前给用户看的那一眼）。
+ *
+ * 与推送概述的关键差别：这里必须把「不会写回本机」的项数摆出来。
+ * 推送时用户关心的是「我带走了什么」；导入时他真正需要知道的是
+ * 「这台机器有哪些东西不会被换掉」——那正是同步配置与复制环境的区别。
+ */
+export function buildImportOverview(plan, options = {}) {
+  const patchRows = plan?.patchRows ?? []
+  const skillFiles = plan?.skillFiles ?? []
+  const refused = plan?.refused ?? []
+  if (patchRows.length === 0 && skillFiles.length === 0 && refused.length === 0) return null
+
+  const stats = [
+    { label: '配置项', value: patchRows.length },
+    { label: '技能文件', value: skillFiles.length },
+  ]
+  if (refused.length > 0) {
+    stats.push({ label: '本机项（不写回）', value: refused.length })
+  }
+
+  const meta = []
+  if (plan?.generatedAt) meta.push(formatIsoTime(plan.generatedAt))
+  if (plan?.generatedBy) meta.push(`来自 ${plan.generatedBy}`)
+  if (plan?.empty === true) meta.push('包里没有需要写回的内容')
+
+  return {
+    title: '本次将导入',
+    stats,
+    meta,
+    // 详情在包里，不在界面上——包里能逐字核对，界面滚动长列表没用。
+    location: plan?.packageDir ?? null,
+    total: patchRows.length + skillFiles.length,
+  }
+}
+
+/**
  * 从拉取报告构建概述。
  *
  * 跳过项不计入 stats——它们没有发生。把它们混进数字会让概述失真。
@@ -66,10 +102,10 @@ export function buildPullOverview(report, options = {}) {
   if (applied.length === 0 && skipped.length === 0) return null
 
   const stats = [
-    { label: '已应用', value: applied.length },
+    { label: options.appliedLabel ?? '已应用', value: applied.length },
   ]
   if (skipped.length > 0) {
-    stats.push({ label: '已跳过', value: skipped.length })
+    stats.push({ label: options.skippedLabel ?? '已跳过', value: skipped.length })
   }
 
   const meta = [formatTime(options.now ?? new Date())]
@@ -78,11 +114,11 @@ export function buildPullOverview(report, options = {}) {
   }
 
   return {
-    title: '本次拉取结果',
+    title: options.title ?? '本次拉取结果',
     stats,
     meta,
     // 拉取后没有导出目录；详情在报告列表与备份里。
-    location: report?.backupPath || null,
+    location: options.location ?? (report?.backupPath || null),
     total: applied.length,
   }
 }
@@ -108,4 +144,18 @@ function formatTime(date) {
   const pad = n => String(n).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} `
     + `${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+/**
+ * 把 ISO 时间串按本地时区显示。
+ *
+ * 包里的 generatedAt 是 ISO 串（导出时由 toISOString 写的），
+ * 直接显示会带 Z 和毫秒；解析不了就原样返回，不要为了好看把它变成「无效日期」。
+ * @param {string} iso
+ * @returns {string}
+ */
+function formatIsoTime(iso) {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return String(iso)
+  return formatTime(date)
 }

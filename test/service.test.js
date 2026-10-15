@@ -561,3 +561,58 @@ test('一个 profile 都没有时给出可行动的说明', async () => {
   await assert.rejects(() => service.prepareInspect(), /没有在 .*找到任何 profile/)
   rmSync(root, { recursive: true })
 })
+
+// ─── 导入目录与「包里有没有东西」（第二阶段）──────────────────────
+
+test('没配过目录时，导入默认去找导出的那个位置 —— 同机导出再导入不必先想路径', () => {
+  const { dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({ backend: fakeBackend(), workDir, dshRoot, skillsRoot })
+
+  assert.equal(service.defaultImportRoot(), service.defaultExportRoot())
+})
+
+test('设置页填了导入目录就用它', () => {
+  const { dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({
+    backend: fakeBackend(), workDir, dshRoot, skillsRoot, importRoot: join(dshRoot, 'from-usb'),
+  })
+
+  assert.equal(service.defaultImportRoot(), join(dshRoot, 'from-usb'))
+})
+
+test('导入目录还没建时，describeImportSource 也不能抛 —— 打开设置页是正常操作', () => {
+  const { dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({
+    backend: fakeBackend(), workDir, dshRoot, skillsRoot, importRoot: join(dshRoot, 'never'),
+  })
+  const info = service.describeImportSource()
+
+  assert.equal(info.available, false)
+  assert.ok(info.errors.length > 0, '失败也要给一句能显示的话')
+  assert.equal(info.resolved, null)
+})
+
+test('导出过的包能被 describeImportSource 认出来，并报出是谁导的、有多少文件', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({ backend: fakeBackend(), workDir, dshRoot, skillsRoot })
+  const plan = await service.preparePush({ exportRoot: join(root, 'out'), generatedBy: 'workstation' })
+
+  const info = service.describeImportSource({ packageDir: plan.exported.exportPath })
+  assert.equal(info.available, true, info.errors.join('; '))
+  assert.equal(info.generatedBy, 'workstation')
+  assert.ok(info.fileCount > 0)
+  assert.equal(info.resolved, plan.exported.exportPath)
+})
+
+test('prepareImport 不给目录时走默认导入目录，而不是报「缺参数」', async () => {
+  const { dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({
+    backend: fakeBackend(), workDir, dshRoot, skillsRoot, importRoot: join(dshRoot, 'never'),
+  })
+
+  await assert.rejects(
+    () => service.prepareImport({}),
+    // 默认目录还不存在时，报的应当是「那个目录里没有包」，而不是「你没给目录」
+    error => !/packageDir/.test(String(error.message)),
+  )
+})

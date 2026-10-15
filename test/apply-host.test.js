@@ -82,6 +82,24 @@ test('未配置云端时 configured 为 false，但服务照常可用', () => {
   assert.equal(roam.service.isConfigured(), false)
 })
 
+// 这四个字段是「用户能不能在界面上改变行为」的全部通道。
+// 少接一个，界面照样能填、照样显示「已保存」，而行为纹丝不动——
+// 这正是「导入目录填了但导入仍去默认位置」那个缺陷的形态，
+// 而且单元测试与真装载都不会报错，只有真点一次才看得见。
+test('设置页填的目录与 profile 必须真的传到服务层，不能只存在配置里', () => {
+  const fake = fakeContext({ settings: {}, skills: {} })
+  apply(fake.ctx, {
+    dshHome: '/tmp/roam-apply-test',
+    profileName: 'desk',
+    exportRoot: '/tmp/roam-export',
+    importRoot: '/tmp/roam-import',
+  })
+  const { service } = fake.provided.settingsRoam
+
+  assert.equal(service.defaultExportRoot(), '/tmp/roam-export')
+  assert.equal(service.defaultImportRoot(), '/tmp/roam-import')
+})
+
 test('声明了 settings 与 skills 两个必需依赖', () => {
   assert.deepEqual([...hostInject].sort(), ['settings', 'skills'])
 })
@@ -118,14 +136,14 @@ test('pluginManager 出现时能被捕获到 —— 注入是可选的，不是�
 
 // ─── 路由注册 ────────────────────────────────────────────────────────
 
-test('有 connection 时注册四条路由，且经 effect 绑定生命周期', () => {
+test('有 connection 时注册五条路由，且经 effect 绑定生命周期', () => {
   const routes = []
   const { effects } = setup({
     settings: {}, skills: {},
     connection: { fetch: { register: r => { routes.push(r); return async () => {} } } },
   })
 
-  assert.equal(effects.length, 4, '四条路由各挂一次 effect')
+  assert.equal(effects.length, 5, '五条路由各挂一次 effect')
   for (const e of effects) {
     assert.match(e.label, /dsh-settings-roam: route /, '标签要能看出是哪条路由')
   }
@@ -135,7 +153,7 @@ test('有 connection 时注册四条路由，且经 effect 绑定生命周期', 
   assert.deepEqual(
     routes.map(r => r.path),
     ['/api/settings-roam.status', '/api/settings-roam.export',
-      '/api/settings-roam.push', '/api/settings-roam.pull'],
+      '/api/settings-roam.import', '/api/settings-roam.push', '/api/settings-roam.pull'],
   )
 })
 

@@ -26,8 +26,8 @@
       "hint": "「导出到文件」把要备份的内容写到这里；留空用默认目录。"
     },
     "importRoot": {
-      "label": "导入目录（尚未生效）",
-      "hint": "尚未生效：第二阶段才会读取。现在填了不会有任何效果，可以先放着。"
+      "label": "导入目录",
+      "hint": "「导入」去这个目录里找之前导出的包；留空就用上面的导出目录。"
     }
   },
   "status": {
@@ -44,23 +44,28 @@
     "export": "正在把要备份的内容写到文件…",
     "pushPrepare": "正在算要推送什么…",
     "pullPrepare": "正在算云端差异…",
+    "importPrepare": "正在核对导入包…",
+    "importConfirm": "正在写回本机…",
     "pushConfirm": "正在推送…",
     "pullConfirm": "正在应用…"
   },
   "action": {
     "export": "导出到文件",
+    "import": "导入",
     "pull": "拉取",
     "push": "推送",
     "confirm": "确认",
     "confirmPush": "确认推送",
     "confirmPull": "确认拉取",
+    "confirmImport": "确认导入",
     "cancel": "取消",
     "copy": "复制路径",
     "copied": "已复制"
   },
   "pending": {
     "push": "将推送 {files} 个文件，其中 {n} 项与云端不同。确认后写入云端。",
-    "pull": "云端有 {remote} 条配置，其中 {n} 项与本机不同。确认后改动本机。"
+    "pull": "云端有 {remote} 条配置，其中 {n} 项与本机不同。确认后改动本机。",
+    "import": "将写回 {n} 项，本机原有的监听地址、主题等不受影响。确认后改动本机。"
   },
   "overview": {
     "title": "这次同步了什么"

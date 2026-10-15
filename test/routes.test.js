@@ -15,7 +15,11 @@ import { ROUTES, ROUTE_PREFIX, describeRoutes, createRouteHandlers } from '../sr
 
 /** 造一个够用的假 service。只实现路由真正调用的那些方法。 */
 function fakeService(overrides = {}) {
-  const calls = { preparePush: 0, confirmPush: 0, preparePull: 0, applyPull: 0 }
+  const calls = {
+    preparePush: 0, confirmPush: 0, preparePull: 0, applyPull: 0,
+    prepareImport: 0, applyImport: 0,
+    prepareImportArgs: [], applyImportArgs: [],
+  }
   const base = {
     dshRoot: '/home/u/.dsh',
     isConfigured: () => true,
@@ -57,6 +61,27 @@ function fakeService(overrides = {}) {
       calls.applyPull += 1
       return { applied: [{ name: 'x' }], skipped: [], backupPath: '/tmp/bk' }
     },
+    defaultImportRoot: () => '/tmp/import',
+    describeImportSource: () => ({
+      dir: '/tmp/import', resolved: null, available: false,
+      errors: [], warnings: [], generatedAt: null, generatedBy: null, fileCount: 0,
+    }),
+    prepareImport: async (input) => {
+      calls.prepareImport += 1
+      calls.prepareImportArgs.push(input)
+      return {
+        packageDir: '/tmp/import/20261015-120000',
+        patchRows: [{ id: 'llm-pi-ai' }],
+        skillFiles: [{ relPath: 'a/SKILL.md' }],
+        refused: [{ name: 'webserver', reason: 'machine' }],
+        empty: false,
+      }
+    },
+    applyImport: async (plan, input) => {
+      calls.applyImport += 1
+      calls.applyImportArgs.push(input)
+      return { applied: [{ name: 'llm-pi-ai' }], skipped: [], backupPath: '/tmp/bk2' }
+    },
   }
   return { service: { ...base, ...overrides }, calls }
 }
@@ -67,7 +92,14 @@ const deps = (overrides) => {
     service,
     calls,
     buildPushOverview: () => ({ title: '本次将同步', stats: [], meta: [], location: '/e' }),
-    buildPullOverview: () => ({ title: '本次拉取结果', stats: [], meta: [], location: '/b' }),
+    buildPullOverview: (report, options = {}) => ({
+      title: options.title ?? '本次拉取结果',
+      stats: [],
+      meta: [],
+      location: options.location ?? '/b',
+      appliedLabel: options.appliedLabel ?? null,
+    }),
+    buildImportOverview: () => ({ title: '本次将导入', stats: [], meta: [], location: '/i' }),
   }
 }
 
@@ -264,16 +296,17 @@ test('内部异常回一句可显示的话，不带堆栈与绝对路径', async
   assert.ok(!/\bat\s+\w+.*:\d+:\d+/.test(body.error), '不得把堆栈回给界面')
 })
 
-test('describeRoutes 给出四条路由，方法与路径齐全', () => {
+test('describeRoutes 给出五条路由，方法与路径齐全', () => {
   const routes = describeRoutes(deps())
   assert.deepEqual(
     routes.map(r => r.path),
-    [ROUTES.status, ROUTES.export, ROUTES.push, ROUTES.pull],
+    [ROUTES.status, ROUTES.export, ROUTES.import, ROUTES.push, ROUTES.pull],
   )
   assert.deepEqual(routes[0].methods, ['GET'])
   assert.deepEqual(routes[1].methods, ['POST'])
   assert.deepEqual(routes[2].methods, ['POST'])
   assert.deepEqual(routes[3].methods, ['POST'])
+  assert.deepEqual(routes[4].methods, ['POST'])
   for (const r of routes) {
     assert.equal(typeof r.fetch, 'function')
     assert.equal(r.requestBody, 'buffered')
@@ -378,4 +411,116 @@ test('导出失败时回的是可显示的话，且不留下待确认状态', as
   // 导出没有留下 pending：随后一次确认应当仍报「还没预览过」
   const confirm = await handlers.fetch(post(ROUTES.push, { step: 'confirm', token: 'x' }))
   assert.equal(confirm.status, 409)
+})
+
+// ─── 导入（第二阶段：不联网也要能把备份回填）────────────────────
+
+test('导入不需要云端仓库 —— 第二阶段的目标不依赖远端', async () => {
+  const d = deps({ isConfigured: () => false })
+  const handlers = createRouteHandlers(d)
+
+  const res = await handlers.fetch(post(ROUTES.import, { step: 'prepare' }))
+  const body = await res.json()
+
+  assert.equal(res.status, 200)
+  assert.equal(body.ok, true)
+  assert.equal(d.calls.prepareImport, 1)
+})
+
+test('导入默认去服务层给的目录找包，不让界面自己拼路径', async () => {
+  const d = deps()
+  const handlers = createRouteHandlers(d)
+  await handlers.fetch(post(ROUTES.import, { step: 'prepare' }))
+
+  assert.equal(d.calls.prepareImportArgs[0].packageDir, '/tmp/import')
+})
+
+test('导入可以指定别的目录 —— 包放在 U 盘上也该能导', async () => {
+  const d = deps()
+  const handlers = createRouteHandlers(d)
+  await handlers.fetch(post(ROUTES.import, { step: 'prepare', packageDir: '/mnt/usb/roam' }))
+
+  assert.equal(d.calls.prepareImportArgs[0].packageDir, '/mnt/usb/roam')
+})
+
+test('导入预览要说明「哪些不写回」，而不只给一个数字', async () => {
+  const handlers = createRouteHandlers(deps())
+  const body = await (await handlers.fetch(post(ROUTES.import, { step: 'prepare' }))).json()
+
+  assert.equal(body.step, 'prepare')
+  assert.ok(typeof body.token === 'string' && body.token.length > 0)
+  assert.ok(Array.isArray(body.refused) && body.refused.length > 0, '要能逐条解释为什么不写回')
+})
+
+test('没有预览就确认，导入会被挡下并说清下一步', async () => {
+  const handlers = createRouteHandlers(deps())
+  const res = await handlers.fetch(post(ROUTES.import, { step: 'confirm', token: 'x' }))
+
+  assert.equal(res.status, 409)
+  assert.match((await res.json()).error, /还没有预览过/)
+})
+
+test('导入确认用预览时的 token，且只认那一次', async () => {
+  const d = deps()
+  const handlers = createRouteHandlers(d)
+  const prepared = await (await handlers.fetch(post(ROUTES.import, { step: 'prepare' }))).json()
+
+  const first = await handlers.fetch(post(ROUTES.import, { step: 'confirm', token: prepared.token }))
+  assert.equal(first.status, 200)
+  assert.equal(d.calls.applyImport, 1)
+
+  const second = await handlers.fetch(post(ROUTES.import, { step: 'confirm', token: prepared.token }))
+  assert.equal(second.status, 409, 'token 是一次性的，连点两次不该写两遍')
+  assert.equal(d.calls.applyImport, 1)
+})
+
+test('导入确认带上备份根目录 —— 动本机之前必须先留退路', async () => {
+  const d = deps()
+  const handlers = createRouteHandlers(d)
+  const prepared = await (await handlers.fetch(post(ROUTES.import, { step: 'prepare' }))).json()
+  await handlers.fetch(post(ROUTES.import, { step: 'confirm', token: prepared.token }))
+
+  assert.ok(d.calls.applyImportArgs[0].backupRoot, '备份根目录不能为空')
+})
+
+test('导入确认后给出的是「导入结果」概述，不是拉取的', async () => {
+  const handlers = createRouteHandlers(deps())
+  const prepared = await (await handlers.fetch(post(ROUTES.import, { step: 'prepare' }))).json()
+  const body = await (await handlers.fetch(
+    post(ROUTES.import, { step: 'confirm', token: prepared.token }),
+  )).json()
+
+  // 概述的标题必须由导入指定，否则用户在一次导入之后会看到「本次拉取结果」
+  assert.equal(body.overview.title, '本次导入结果')
+  assert.equal(body.overview.appliedLabel, '已写入')
+  assert.equal(body.overview.location, '/tmp/import/20261015-120000', '详情位置指向那个包，而不是备份目录')
+  assert.ok(body.report, '报告要回给界面，跳过项才能逐条解释')
+})
+
+test('待确认的只有一份 —— 预览导入会顶掉之前预览的推送', async () => {
+  const d = deps()
+  const handlers = createRouteHandlers(d)
+  const pushed = await (await handlers.fetch(post(ROUTES.push, { step: 'prepare' }))).json()
+  await handlers.fetch(post(ROUTES.import, { step: 'prepare' }))
+
+  const res = await handlers.fetch(post(ROUTES.push, { step: 'confirm', token: pushed.token }))
+  assert.equal(res.status, 409)
+  assert.match((await res.json()).error, /作废|另一种操作/)
+  assert.equal(d.calls.confirmPush, 0)
+})
+
+test('GET 导入被拒 —— 它改本机文件，不能由一次导航触发', async () => {
+  const handlers = createRouteHandlers(deps())
+  assert.equal((await handlers.fetch(get(ROUTES.import))).status, 405)
+})
+
+test('导入包不可用时回可显示的话，且不留下待确认状态', async () => {
+  const d = deps({
+    prepareImport: async () => { throw new Error('那个目录里没有导出包') },
+  })
+  const handlers = createRouteHandlers(d)
+
+  const res = await handlers.fetch(post(ROUTES.import, { step: 'prepare' }))
+  assert.equal(res.status, 500)
+  assert.match((await res.json()).error, /没有导出包/)
 })

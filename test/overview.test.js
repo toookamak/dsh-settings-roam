@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildPushOverview, buildPullOverview } from '../src/overview.js'
+import { buildPushOverview, buildPullOverview, buildImportOverview } from '../src/overview.js'
 
 const FILES = [
   { path: 'config/profile.patch.yml', content: '- id: llm-pi-ai\n' },
@@ -104,4 +104,74 @@ test('拉取全空返回 null；全部跳过时不给「已跳过 0」', () => {
   const o = buildPullOverview({ applied: [{ name: 'a' }], skipped: [] })
   const labels = o.stats.map(s => s.label)
   assert.ok(!labels.includes('已跳过'), '没有跳过项就不显示这一项')
+})
+
+// ─── 导入概述（第二阶段的「先看后写」那一半）──────────────────────
+
+test('导入概述把「不写回的项数」摆出来 —— 这正是它与复制环境的区别', () => {
+  const view = buildImportOverview({
+    packageDir: '/tmp/pkg/20261015-120000',
+    generatedAt: '2026-10-15T04:00:00.000Z',
+    generatedBy: 'workstation',
+    patchRows: [{ id: 'llm-pi-ai' }],
+    skillFiles: [{ relPath: 'a/SKILL.md' }, { relPath: 'b/SKILL.md' }],
+    refused: [{ path: '本机:webserver' }, { path: '本机:ui-theme' }],
+  })
+
+  assert.equal(view.title, '本次将导入')
+  assert.deepEqual(view.stats.map(s => [s.label, s.value]), [
+    ['配置项', 1],
+    ['技能文件', 2],
+    ['本机项（不写回）', 2],
+  ])
+  assert.equal(view.total, 3, 'total 只数会写回的项')
+  assert.equal(view.location, '/tmp/pkg/20261015-120000', '详情在包里')
+})
+
+test('没有本机项时不多出一行 0 —— 空数字会让人以为哪里没做', () => {
+  const view = buildImportOverview({
+    packageDir: '/tmp/pkg',
+    patchRows: [{ id: 'llm-pi-ai' }],
+    skillFiles: [],
+    refused: [],
+  })
+  assert.deepEqual(view.stats.map(s => s.label), ['配置项', '技能文件'])
+})
+
+test('空洞里空空的包返回 null，界面据此不渲染空壳', () => {
+  assert.equal(buildImportOverview({ patchRows: [], skillFiles: [], refused: [] }), null)
+  assert.equal(buildImportOverview(null), null)
+})
+
+test('包来自哪台机器、什么时候导的，要在概述里说清', () => {
+  const view = buildImportOverview({
+    packageDir: '/tmp/pkg',
+    generatedAt: '2026-10-15T04:00:00.000Z',
+    generatedBy: 'workstation',
+    patchRows: [{ id: 'llm-pi-ai' }],
+    refused: [],
+  })
+  assert.ok(view.meta.includes('来自 workstation'))
+  // 时间必须是本地可读的，不能把 ISO 串原样丢给用户
+  assert.ok(view.meta.some(m => /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(m)), view.meta.join(' | '))
+})
+
+test('generatedAt 坏掉时原样显示，不要变成「无效日期」', () => {
+  const view = buildImportOverview({
+    packageDir: '/tmp/pkg',
+    generatedAt: 'not-a-date',
+    patchRows: [{ id: 'x' }],
+    refused: [],
+  })
+  assert.ok(view.meta.includes('not-a-date'))
+})
+
+test('拉取概述的标题与标签可以由调用方改 —— 导入结果复用它，但不能叫「拉取」', () => {
+  const view = buildPullOverview(
+    { applied: [{ name: 'a' }], skipped: [{ name: 'b' }], backupPath: '/tmp/bk' },
+    { title: '本次导入结果', appliedLabel: '已写入', location: '/tmp/pkg' },
+  )
+  assert.equal(view.title, '本次导入结果')
+  assert.equal(view.stats[0].label, '已写入')
+  assert.equal(view.location, '/tmp/pkg')
 })

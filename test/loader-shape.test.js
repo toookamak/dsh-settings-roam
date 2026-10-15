@@ -431,9 +431,10 @@ test('界面用宿主提供的组件，而不是裸 HTML 元素', async () => {
   const field = byClass(configCard, 'roam-field')
 
   assert.ok(isInput(byClass(field, 'roam-field-input')), '输入框要用宿主的 Input')
-  assert.ok(
-    (byClass(section, 'roam-actions').children ?? []).filter(isButton).length === 3,
-    '三个动作都要用宿主的 Button',
+  assert.equal(
+    (byClass(section, 'roam-actions').children ?? []).filter(isButton).length,
+    4,
+    '四个动作都要用宿主的 Button',
   )
 })
 
@@ -459,7 +460,7 @@ test('界面组件取不到时降级为可用元素，而不是整节崩掉', as
     actions: {},
   }))
   const buttons = (byClass(section, 'roam-actions').children ?? []).filter(c => c?.type === 'button')
-  assert.equal(buttons.length, 3, '降级后仍要给出三个可点的按钮，只是没有宿主的样式')
+  assert.equal(buttons.length, 4, '降级后仍要给出四个可点的按钮，只是没有宿主的样式')
 })
 
 test('样式表按 id 幂等注入 —— 反复挂载不堆样式', () => {
@@ -518,7 +519,7 @@ test('状态是带状态点的，不只是文字 —— 「一眼看出」靠形
   assert.equal(el.props['data-tone'], 'warning', '语气要落在属性上，交给样式表处理')
 })
 
-test('未配置云端仓库时，拉取与推送必须是禁用的', async () => {
+test('未配置云端仓库时，只有拉取与推送禁用 —— 导出与导入不依赖云端', async () => {
   const exported = await loadClient('disabled')
   const section = render(exported.Section({
     state: { kind: 'needs-config', status: { configured: false } },
@@ -527,8 +528,9 @@ test('未配置云端仓库时，拉取与推送必须是禁用的', async () =>
   const buttons = (byClass(section, 'roam-actions').children ?? []).filter(isButton)
   // 点下去必然失败的按钮，和「按钮没接上线」在用户眼里是同一件事
   assert.equal(buttons[0].props.disabled, false, '导出不依赖云端，必须可点')
-  assert.equal(buttons[1].props.disabled, true, '未配置时拉取要禁用')
-  assert.equal(buttons[2].props.disabled, true, '未配置时推送要禁用')
+  assert.equal(buttons[1].props.disabled, false, '导入读的是本机目录，不该被云端配置挡住')
+  assert.equal(buttons[2].props.disabled, true, '未配置时拉取要禁用')
+  assert.equal(buttons[3].props.disabled, true, '未配置时推送要禁用')
 })
 
 test('加载中与执行中禁用全部动作 —— 不给双击留下第二次请求', async () => {
@@ -562,14 +564,21 @@ test('配置卡列出四个字段，且每个字段都带说明文字', async ()
   }
 })
 
-test('尚未生效的字段必须在说明里自称尚未生效', async () => {
+test('四个字段都必须说明自己起什么作用 —— 尤其不能让「导入目录」继续自称没用', async () => {
   const exported = await loadClient('config-stage')
   const card = render(exported.ConfigCard({ form: fakeForm(), t: exported.makeT('zh') }))
   const fields = (card.children ?? []).filter(c => c?.props?.className === 'roam-field')
   const hints = fields.map(f => byClass(f, 'roam-field-hint').children[0])
+  assert.equal(hints.length, 4)
+  assert.ok(hints.every(h => typeof h === 'string' && h.length > 0), '每个字段都要有说明')
+  // 第二阶段已落地，界面上不能再留着「尚未生效」的占位话术——用户会以为它没用
   assert.ok(
-    hints.some(h => /尚未生效|占位/.test(h)),
-    'importRoot 现在填了也不起作用，必须在界面上写清楚',
+    !hints.some(h => /尚未生效|占位/.test(h)),
+    '导入已经能用了，标签与说明里都不该再说它没生效',
+  )
+  assert.ok(
+    hints.some(h => /导出的包|导出目录/.test(h)),
+    '导入目录的说明要说清它去哪找包',
   )
 })
 
@@ -885,24 +894,31 @@ test('预览之后停在「待确认」，不能显示成已完成', async () =>
 
 // ─── 动作区 ──────────────────────────────────────────────────────────
 
-test('动作区第一个是「导出到文件」—— 唯一不依赖云端仓库的动作', async () => {
+test('动作区第一个是「导出到文件」，且每个按钮都真接上了动作', async () => {
   const exported = await loadClient('actions')
   const clicked = []
   const section = render(exported.Section({
     state: { kind: 'clean', status: { configured: true } },
-    actions: { onExport: () => clicked.push('export'), onPull: () => {}, onPush: () => {} },
+    actions: {
+      onExport: () => clicked.push('export'),
+      onImport: () => clicked.push('import'),
+      onPull: () => clicked.push('pull'),
+      onPush: () => clicked.push('push'),
+    },
   }))
   const buttons = (byClass(section, 'roam-actions').children ?? []).filter(isButton)
 
   assert.equal(buttons[0].children[0], '导出到文件', '第一次打开这一节最该点的是它')
-  assert.deepEqual(buttons.slice(1).map(b => b.children[0]), ['拉取', '推送'])
-  buttons[0].props.onClick()
-  assert.deepEqual(clicked, ['export'])
+  assert.deepEqual(buttons.map(b => b.children[0]), ['导出到文件', '导入', '拉取', '推送'])
+  for (const b of buttons) b.props.onClick()
+  assert.deepEqual(clicked, ['export', 'import', 'pull', 'push'])
 })
 
 test('导出不经过确认流程 —— 无副作用的本地动作不该多点两次', async () => {
   const src = read('client.js')
-  const body = src.slice(src.indexOf('const beginExport'), src.indexOf('/** 统一处理'))
+  // 边界用下一个函数的名字，不用注释文本——注释改一个字就会切出后面所有东西，
+  // 那时断言会「因为读到了别的代码」而失败，而不是因为导出真的走错了流程。
+  const body = src.slice(src.indexOf('const beginExport'), src.indexOf('const begin = React.useCallback'))
   assert.ok(body.includes('ROUTES.export'), '导出要打导出路由')
   assert.ok(!body.includes('pending'), '导出不产生待确认状态')
   assert.ok(!body.includes('step:'), '导出没有 prepare/confirm 两段')

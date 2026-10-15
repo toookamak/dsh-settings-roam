@@ -12,7 +12,7 @@ import z from '@deepseek-ai/schemastery'
 import { resolveDshHome } from './src/home-paths.js'
 import { createGitBackend } from './src/backends/git.js'
 import { createSyncService } from './src/service.js'
-import { buildPushOverview, buildPullOverview } from './src/overview.js'
+import { buildPushOverview, buildPullOverview, buildImportOverview } from './src/overview.js'
 import { describeRoutes } from './src/routes.js'
 
 export const name = 'settings-roam'
@@ -131,6 +131,7 @@ export function apply(ctx, config) {
     dshRoot,
     profileName: readOption('profileName') ?? undefined,
     exportRoot: readOption('exportRoot') ?? undefined,
+    importRoot: readOption('importRoot') ?? undefined,
     // 校验通道：直读文件是主通道，ctx.skills 是交叉校验通道。
     // 不传它读路径就退化成单通道——最坏情况是静默同步错内容而不是报警。
     skillService: ctx.skills,
@@ -220,7 +221,7 @@ export function apply(ctx, config) {
   // 每条路由都经 ctx.effect 注册，卸载插件时随之注销——这也是它比在模块级
   // 挂一个全局 HTTP 服务正确的地方：一个进程可能加载多份 profile。
   ctx.inject(['connection'], (scope) => {
-    for (const route of describeRoutes({ service, buildPushOverview, buildPullOverview })) {
+    for (const route of describeRoutes({ service, buildPushOverview, buildPullOverview, buildImportOverview })) {
       scope.effect(
         () => scope.connection.fetch.register(route),
         `dsh-settings-roam: route ${route.path}`,

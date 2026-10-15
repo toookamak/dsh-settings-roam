@@ -1,5 +1,5 @@
 /**
- * 宿主半侧对浏览器半侧暴露的三个 HTTP 路由。
+ * 宿主半侧对浏览器半侧暴露的 HTTP 路由。
  *
  * 为什么必须走 HTTP 而不是把数据直接塞给组件：
  *   浏览器半侧是独立加载的 bundle，拿不到宿主模块，也读不了文件系统。
@@ -7,7 +7,7 @@
  *   这些问题只能由宿主算好、经路由送出去。
  *
  * 为什么单个路由带 step 而不是拆成五个路径：
- *   push/pull 各是「先预览、再确认」两段，两段共享同一份待确认计划。
+ *   push/pull/import 各是「先预览、再确认」两段，两段共享同一份待确认计划。
  *   拆成五个路径会让「哪两份是同一次操作」变成靠命名约定去猜；
  *   放在一个路由里，step 是显式的，配对的计划也存在同一个闭包里。
  *
@@ -37,6 +37,7 @@ export const ROUTE_PREFIX = '/api/settings-roam'
 export const ROUTES = {
   status: `${ROUTE_PREFIX}.status`,
   export: `${ROUTE_PREFIX}.export`,
+  import: `${ROUTE_PREFIX}.import`,
   push: `${ROUTE_PREFIX}.push`,
   pull: `${ROUTE_PREFIX}.pull`,
 }
@@ -106,6 +107,7 @@ export function createRouteHandlers(deps) {
     service,
     buildPushOverview,
     buildPullOverview,
+    buildImportOverview,
     now = () => new Date(),
   } = deps
 
@@ -114,7 +116,7 @@ export function createRouteHandlers(deps) {
 
   /**
    * 存一份待确认的计划，返回它的 token。
-   * @param {'push'|'pull'} kind
+   * @param {'push'|'pull'|'import'} kind
    * @param {object} plan
    * @returns {string}
    */
@@ -131,7 +133,7 @@ export function createRouteHandlers(deps) {
    * 从没预览过 → 先点一次；带了别的 token → 那次预览已经作废；
    * 放太久 → 重新预览，免得拿一份十分钟前的差异去覆盖现在的本机。
    *
-   * @param {'push'|'pull'} kind
+   * @param {'push'|'pull'|'import'} kind
    * @param {unknown} token
    * @returns {{ok: true, plan: object} | {ok: false, error: string}}
    */
@@ -165,6 +167,9 @@ export function createRouteHandlers(deps) {
       configured: service.isConfigured(),
       dshRoot: service.dshRoot,
       exportRoot: service.defaultExportRoot(),
+      importRoot: service.defaultImportRoot(),
+      // 导入目录里有没有可用的包。绝不抛错，所以「还没导出过」也能照常显示。
+      importSource: service.describeImportSource(),
       profile: service.describeProfile(),
       patchExists: inspected.patchExists,
       total: inspected.total,
@@ -281,6 +286,59 @@ export function createRouteHandlers(deps) {
   }
 
   /**
+   * 导入：prepare 说清会写什么、不写什么，confirm 才动本机文件。
+   *
+   * 与「拉取」的区别值得说清，因为界面上这两个按钮长得像：
+   *   拉取是「从云端拿」——需要先配好仓库地址，还要经过 git；
+   *   导入是「从本机的一个目录拿」——不联网、不需要仓库地址。
+   * 第二阶段的目标正是「不依赖云端也能把备份回填」，
+   * 否则用户在新机器上要先能连上 git 才能恢复配置，顺序是反的。
+   *
+   * 为什么导入也要两段式：它会改本机配置与技能文件。
+   * 凡是会改本机的动作，都必须先让用户看清楚再执行——这条对拉取和导入一视同仁。
+   *
+   * @param {Request} request
+   */
+  const importFrom = async (request) => {
+    const body = await readBody(request)
+    const step = body.step ?? 'prepare'
+    const packageDir = body.packageDir ?? service.defaultImportRoot()
+
+    if (step === 'prepare') {
+      const plan = await service.prepareImport({ packageDir })
+      return jsonResponse({
+        ok: true,
+        step,
+        token: stash('import', plan),
+        overview: buildImportOverview(plan),
+        // 让界面能说清「这些为什么不写回」，而不是只给一个数字。
+        refused: plan.refused,
+        empty: plan.empty,
+      })
+    }
+
+    if (step === 'confirm') {
+      const taken = take('import', body.token)
+      if (!taken.ok) return jsonResponse({ ok: false, error: taken.error }, 409)
+      const report = await service.applyImport(taken.plan, {
+        backupRoot: service.defaultBackupRoot(),
+      })
+      return jsonResponse({
+        ok: true,
+        step,
+        overview: buildPullOverview(report, {
+          title: '本次导入结果',
+          appliedLabel: '已写入',
+          location: taken.plan.packageDir,
+        }),
+        report,
+      })
+    }
+
+    return jsonResponse({ ok: false, error: `不认识的 step：${String(step)}` }, 400)
+  }
+
+  /**
    * 按路径分派。
    *
    * 单独抽出来是为了能直接喂 Request 做单测，不必起 HTTP 服务。
@@ -298,6 +356,10 @@ export function createRouteHandlers(deps) {
         if (request.method !== 'POST') return jsonResponse({ ok: false, error: '导出需要 POST' }, 405)
         return await exportLocal(request)
       }
+      if (path === ROUTES.import) {
+        if (request.method !== 'POST') return jsonResponse({ ok: false, error: '导入需要 POST' }, 405)
+        return await importFrom(request)
+      }
       if (path === ROUTES.push) {
         if (request.method !== 'POST') return jsonResponse({ ok: false, error: '推送需要 POST' }, 405)
         return await push(request)
@@ -313,7 +375,7 @@ export function createRouteHandlers(deps) {
     }
   }
 
-  return { fetch, status, exportLocal, push, pull }
+  return { fetch, status, exportLocal, importFrom, push, pull }
 }
 
 /**
@@ -327,6 +389,7 @@ export function describeRoutes(deps) {
   return [
     { path: ROUTES.status, methods: ['GET'], requestBody: 'buffered', fetch: handlers.fetch },
     { path: ROUTES.export, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
+    { path: ROUTES.import, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
     { path: ROUTES.push, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
     { path: ROUTES.pull, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
   ]

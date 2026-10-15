@@ -107,6 +107,62 @@ export function createSyncService(config) {
   /** 用户在设置页指定的导出目录；留空时用数据根目录下的默认位置。 */
   const configuredExportRoot = config.exportRoot ?? null
 
+  /** 用户在设置页指定的导入目录（放导出包的地方）；留空时用默认位置。 */
+  const configuredImportRoot = config.importRoot ?? null
+
+  /**
+   * 默认导入目录。
+   *
+   * 与 defaultExportRoot 是同一个位置，这是刻意的：导出的包默认落在
+   * <dshRoot>/settings-roam/export/<时间戳>，而导入默认去那里找最新的一次。
+   * 用户「在这台机器导出、换台机器导入」时不必先去想路径。
+   */
+  function defaultImportRoot() {
+    return configuredImportRoot ?? configuredExportRoot ?? join(dshRoot, 'settings-roam', 'export')
+  }
+
+  /**
+   * 看一眼导入目录里有没有可用的包。**绝不抛错。**
+   *
+   * 界面每次打开都要显示这一条，而「目录还没建」「用户还没导出过」
+   * 是完全正常的状态。做成会抛错的函数，会让「打开设置页」这件事
+   * 在正常环境下失败。
+   *
+   * @param {{packageDir?: string}} [input]
+   * @returns {{dir: string, resolved: string|null, available: boolean, errors: string[],
+   *   warnings: string[], generatedAt: string|null, generatedBy: string|null, fileCount: number}}
+   */
+  function describeImportSource(input = {}) {
+    const dir = input.packageDir ?? defaultImportRoot()
+    const empty = {
+      dir,
+      resolved: null,
+      available: false,
+      errors: [],
+      warnings: [],
+      generatedAt: null,
+      generatedBy: null,
+      fileCount: 0,
+    }
+    try {
+      const resolved = resolvePackageDir(dir)
+      const pkg = readPackage(resolved)
+      const check = validatePackage(pkg)
+      return {
+        ...empty,
+        resolved,
+        available: check.ok,
+        errors: check.errors,
+        warnings: check.warnings,
+        generatedAt: pkg.manifest?.generatedAt ?? null,
+        generatedBy: pkg.manifest?.generatedBy ?? null,
+        fileCount: Array.isArray(pkg.manifest?.files) ? pkg.manifest.files.length : 0,
+      }
+    } catch (error) {
+      return { ...empty, errors: [String(error?.message ?? error)] }
+    }
+  }
+
   /** 解析出本次操作的目标 profile 名。 */
   function resolveProfileName() {
     if (explicitProfile !== null) return explicitProfile
@@ -564,7 +620,7 @@ export function createSyncService(config) {
      * @returns {Promise<object>}
      */
     async prepareImport(input = {}) {
-      const dir = resolvePackageDir(input.packageDir)
+      const dir = resolvePackageDir(input.packageDir ?? defaultImportRoot())
       const pkg = readPackage(dir)
       const check = validatePackage(pkg)
       if (!check.ok) {
@@ -781,5 +837,21 @@ export function createSyncService(config) {
       // 落在数据根目录下是刻意的：它天然属于这台机器，不会被误同步。
       return configuredExportRoot ?? join(dshRoot, 'settings-roam', 'export')
     },
+
+    /**
+     * 默认去哪个目录找导出包。
+     *
+     * 和 defaultExportRoot 同理：目录归服务层定，界面只需要用。
+     * 刻意与导出默认位置一致——同机导出再导入时用户不必先想路径。
+     * @returns {string}
+     */
+    defaultImportRoot,
+
+    /**
+     * 看一眼导入目录里有没有可用的包。**绝不抛错**，界面每次打开都要调。
+     * @param {{packageDir?: string}} [input]
+     * @returns {object}
+     */
+    describeImportSource,
   }
 }

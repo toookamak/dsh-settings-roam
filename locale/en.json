@@ -26,8 +26,8 @@
       "hint": "Export to file writes the backup here. Empty uses the default directory."
     },
     "importRoot": {
-      "label": "Import directory (not active yet)",
-      "hint": "Not active yet — read in phase two. Setting it now has no effect."
+      "label": "Import directory",
+      "hint": "Import looks here for a previously exported package; empty uses the export directory above."
     }
   },
   "status": {
@@ -44,16 +44,20 @@
     "export": "Writing the backup to disk…",
     "pushPrepare": "Working out what would be pushed…",
     "pullPrepare": "Comparing with the cloud…",
+    "importPrepare": "Checking the package…",
+    "importConfirm": "Writing back to this machine…",
     "pushConfirm": "Pushing…",
     "pullConfirm": "Applying…"
   },
   "action": {
     "export": "Export to file",
+    "import": "Import",
     "pull": "Pull",
     "push": "Push",
     "confirm": "Confirm",
     "confirmPush": "Confirm push",
     "confirmPull": "Confirm pull",
+    "confirmImport": "Confirm import",
     "cancel": "Cancel",
     "copy": "Copy path",
     "copied": "Copied"
