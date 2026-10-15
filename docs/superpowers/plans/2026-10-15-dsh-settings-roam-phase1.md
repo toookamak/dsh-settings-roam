@@ -2339,6 +2339,443 @@ git commit -m "介质：后端抽象与 git 实现，凭据交给系统 git 且�
 
 ---
 
+## 六 · 装配
+
+### Task 12: 同步服务与数据组装
+
+把前面 11 个任务产出的模块接成两个动作。设计 §3.2／§3.3 给出了流程，本任务把它落成代码。
+
+**为什么拆成两个阶段，而不是一个 `push()`**：设计 §3.2 第 6、7 步写明了「展示差异 → 用户确认 → commit + push」是**有意的人工确认**——推送是对外可见的写操作。所以服务层必须提供「准备」与「执行」两段，中间把差异交给界面。若做成一个原子 `push()`，这个确认点在架构上就没有位置了。
+
+这是本任务最重要的设计约束，不是实现细节上的取舍。
+
+**Files:**
+- Create: `src/service.js`
+- Test: `test/service.test.js`
+
+- [ ] **Step 1: 写失败测试**
+
+创建 `test/service.test.js`：
+
+```js
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createSyncService } from '../src/service.js'
+
+const PATCH = [
+  '- id: llm-pi-ai',
+  '  name: "@deepseek-ai/dsh-llm-pi-ai"',
+  '  config:',
+  '    providers:',
+  '      demo:',
+  '        apiKeyEnv: DEMO_KEY',
+  '- id: webserver',
+  '  config:',
+  "    host: '10.0.0.9'",
+  '',
+].join('\n')
+
+/** 假后端：把文件存在内存里，不碰网络与磁盘。 */
+function fakeBackend(initial = {}) {
+  const files = { ...initial }
+  return {
+    files,
+    async ensureReady() {},
+    async pull() {},
+    async push(message) { this.lastPush = message; return { committed: true } },
+    async readFile(p) { return files[p] ?? null },
+    async writeFile(p, c) { files[p] = c },
+    describe() { return '假后端' },
+  }
+}
+
+function sandbox() {
+  const root = mkdtempSync(join(tmpdir(), 'roam-svc-'))
+  const dshRoot = join(root, '.dsh')
+  mkdirSync(dshRoot, { recursive: true })
+  writeFileSync(join(dshRoot, 'cordis.patch.yml'), PATCH)
+  const skillsRoot = join(dshRoot, 'skills')
+  mkdirSync(join(skillsRoot, 'demo'), { recursive: true })
+  writeFileSync(join(skillsRoot, 'demo', 'SKILL.md'), '# demo\n')
+  return { root, dshRoot, skillsRoot, workDir: join(root, 'cloud') }
+}
+
+test('preparePush 组装出云端结构，且不含本机项', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const backend = fakeBackend()
+  const service = createSyncService({ backend, workDir, dshRoot, skillsRoot })
+
+  const plan = await service.preparePush({ generatedBy: 'test-machine' })
+
+  const patch = backend.files['config/profile.patch.yml']
+  assert.ok(patch === undefined, 'preparePush 不应直接写后端 —— 确认点之前不许落盘')
+  assert.ok(plan.files.some(f => f.path === 'config/profile.patch.yml'))
+  const patchFile = plan.files.find(f => f.path === 'config/profile.patch.yml')
+  assert.ok(patchFile.content.includes('llm-pi-ai'), '公共条目应被抽出')
+  assert.ok(!patchFile.content.includes('10.0.0.9'), '本机 host 绝不能进云端')
+  rmSync(root, { recursive: true })
+})
+
+test('preparePush 的差异列表供界面展示', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({
+    backend: fakeBackend(), workDir, dshRoot, skillsRoot,
+  })
+  const plan = await service.preparePush({ generatedBy: 'm' })
+  assert.ok(Array.isArray(plan.diff), '应给出差异列表')
+  assert.ok(typeof plan.summary === 'object', '应给出差异汇总')
+  assert.ok(plan.summary.total >= 1, '首次推送应有新增项')
+  rmSync(root, { recursive: true })
+})
+
+test('confirmPush 才真正写入后端', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const backend = fakeBackend()
+  const service = createSyncService({ backend, workDir, dshRoot, skillsRoot })
+
+  const plan = await service.preparePush({ generatedBy: 'm' })
+  assert.deepEqual(backend.files, {}, '确认之前后端必须保持原样')
+
+  await service.confirmPush(plan)
+  assert.ok(backend.files['config/profile.patch.yml'].includes('llm-pi-ai'))
+  assert.ok(backend.files['snapshot.json'].includes('schemaVersion'))
+  rmSync(root, { recursive: true })
+})
+
+test('技能随推送进入云端，且保留可执行位信息', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const backend = fakeBackend()
+  const service = createSyncService({ backend, workDir, dshRoot, skillsRoot })
+  const plan = await service.preparePush({ generatedBy: 'm' })
+  await service.confirmPush(plan)
+  assert.equal(backend.files['skills/demo/SKILL.md'], '# demo\n')
+  rmSync(root, { recursive: true })
+})
+
+test('preparePull 给出与本机的差异，且不修改本机文件', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  // 云端已有一份不同的 patch
+  const remote = fakeBackend({
+    'config/profile.patch.yml': '- id: llm-pi-ai\n  config:\n    providers:\n      x:\n        apiKeyEnv: X\n',
+    'snapshot.json': JSON.stringify({ schemaVersion: 1, generatedAt: 'T', generatedBy: 'other', entries: [] }),
+  })
+  const service = createSyncService({ backend: remote, workDir, dshRoot, skillsRoot })
+
+  const before = (await import('node:fs')).readFileSync(join(dshRoot, 'cordis.patch.yml'), 'utf8')
+  const plan = await service.preparePull()
+  const after = (await import('node:fs')).readFileSync(join(dshRoot, 'cordis.patch.yml'), 'utf8')
+
+  assert.equal(after, before, 'preparePull 绝不能改本机文件')
+  assert.ok(plan.diff.length >= 1, '应给出差异')
+  rmSync(root, { recursive: true })
+})
+
+test('applyPull 应用配置并出报告，本机值零损伤', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const remote = fakeBackend({
+    'config/profile.patch.yml': [
+      '- id: llm-pi-ai',
+      '  config:',
+      '    providers:',
+      '      x:',
+      '        apiKeyEnv: X',
+      '',
+    ].join('\n'),
+  })
+  const service = createSyncService({ backend: remote, workDir, dshRoot, skillsRoot })
+
+  const plan = await service.preparePull()
+  const report = await service.applyPull(plan, { backupRoot: join(root, 'backup') })
+
+  const { parsePatchList } = await import('../src/yaml-loader.js')
+  const { readFileSync } = await import('node:fs')
+  const after = parsePatchList(readFileSync(join(dshRoot, 'cordis.patch.yml'), 'utf8'))
+  assert.equal(after.find(r => r.id === 'webserver').config.host, '10.0.0.9', '本机值不得被改')
+  assert.ok(after.find(r => r.id === 'llm-pi-ai').config.providers.x, '公共条目应已应用')
+  assert.ok(report.backupPath, '报告应含备份位置')
+  rmSync(root, { recursive: true })
+})
+
+test('报告列出需要补的密钥引用名', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const remote = fakeBackend({
+    'config/profile.patch.yml': [
+      '- id: llm-pi-ai',
+      '  config:',
+      '    providers:',
+      '      fresh:',
+      '        apiKeyEnv: FRESH_KEY',
+      '',
+    ].join('\n'),
+  })
+  const service = createSyncService({ backend: remote, workDir, dshRoot, skillsRoot })
+  const plan = await service.preparePull()
+  const report = await service.applyPull(plan, { backupRoot: join(root, 'backup') })
+  assert.deepEqual(report.needsCredentials, ['FRESH_KEY'], '应指出缺哪个 key')
+  rmSync(root, { recursive: true })
+})
+```
+
+- [ ] **Step 2: 运行测试，确认失败**
+
+运行：`node --test test/service.test.js`
+预期：FAIL，`Cannot find module '../src/service.js'`
+
+- [ ] **Step 3: 实现同步服务**
+
+创建 `src/service.js`：
+
+```js
+/**
+ * 同步服务：把读路径、数据模型、写路径、介质层接成推送与拉取两个动作。
+ *
+ * 本模块的核心设计约束来自设计 §3.2 第 6、7 步：
+ * 「展示差异 → 用户确认 → commit + push」是**有意的人工确认**，
+ * 因为推送是对外可见的写操作。
+ *
+ * 所以两个方向都拆成 prepare / confirm 两段：
+ *   - prepareXxx：只读，算出要写什么与差异，绝不落盘、绝不改本机文件
+ *   - confirmPush / applyPull：真正执行写入
+ *
+ * 只要 prepare 阶段有任何写副作用，「确认」这个动作就名存实亡了。
+ */
+
+import { readFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { parsePatchList, renderPatches } from './yaml-loader.js'
+import { extractShared } from './extract.js'
+import { buildSnapshot, serializeSnapshot } from './snapshot.js'
+import { diffSnapshots, summarizeDiff } from './diff.js'
+import { applyPatchFile, verifyWriteBack } from './apply.js'
+import { scanSkills, listSkillNames } from './skills.js'
+import { assertBackend } from './backends/index.js'
+
+/** 云端布局，见设计 §5.1。 */
+export const CLOUD_PATHS = Object.freeze({
+  snapshot: 'snapshot.json',
+  patch: 'config/profile.patch.yml',
+  bundles: 'config/bundles.json',
+  notes: 'notes.md',
+})
+
+function hashOf(content) {
+  return createHash('sha256').update(content).digest('hex').slice(0, 16)
+}
+
+/**
+ * 从 patch 文本里收集 provider 的 apiKeyEnv 引用名。
+ *
+ * 引用名不是密钥（设计 §6.2），但新机器上若没配这个环境变量，
+ * 一发消息就会认证失败。报告提前把它列出来，用户就不必猜。
+ *
+ * @param {object[]} rows
+ * @returns {string[]}
+ */
+export function collectApiKeyRefs(rows) {
+  const refs = []
+  for (const row of rows) {
+    const providers = row?.config?.providers
+    if (providers === undefined || typeof providers !== 'object') continue
+    for (const def of Object.values(providers)) {
+      const ref = def?.apiKeyEnv
+      if (typeof ref === 'string' && ref !== '' && !refs.includes(ref)) refs.push(ref)
+    }
+  }
+  return refs.sort()
+}
+
+/**
+ * 建一个同步服务。
+ * @param {{backend: object, workDir: string, dshRoot: string, skillsRoot?: string}} config
+ */
+export function createSyncService(config) {
+  const { backend, workDir, dshRoot } = config
+  const skillsRoot = config.skillsRoot ?? join(dshRoot, 'skills')
+  assertBackend(backend)
+
+  const patchFile = join(dshRoot, 'cordis.patch.yml')
+
+  /** 读本机 patch 条目。文件不存在时视为空。 */
+  function readLocalRows() {
+    if (!existsSync(patchFile)) return []
+    const text = readFileSync(patchFile, 'utf8')
+    return text.trim() === '' ? [] : parsePatchList(text)
+  }
+
+  /** 收集技能文件内容：{ 'skills/<名>/<相对路径>': 内容 }。 */
+  function collectSkillFiles() {
+    const out = {}
+    for (const name of listSkillNames(skillsRoot)) {
+      for (const record of scanSkills(skillsRoot, [name])) {
+        const abs = join(skillsRoot, record.relPath)
+        out[`skills/${record.relPath}`] = readFileSync(abs, 'utf8')
+      }
+    }
+    return out
+  }
+
+  return {
+    /**
+     * 推送准备：组装要写入云端的文件与差异。**只读，不写任何地方。**
+     * @param {{generatedBy: string, bundles?: object, now?: Date}} input
+     * @returns {Promise<{files: {path: string, content: string}[], diff: object[], summary: object}>}
+     */
+    async preparePush(input = {}) {
+      const rows = readLocalRows()
+      const { patch } = extractShared({ patchRows: rows })
+
+      const patchContent = renderPatches(patch, 'settings-roam')
+      const files = [
+        { path: CLOUD_PATHS.patch, content: patchContent },
+        ...Object.entries(collectSkillFiles()).map(([path, content]) => ({ path, content })),
+      ]
+      if (input.bundles !== undefined) {
+        files.push({ path: CLOUD_PATHS.bundles, content: JSON.stringify(input.bundles, null, 2) + '\n' })
+      }
+
+      // 与云端现状比对，供界面展示
+      await backend.pull()
+      const remoteSnapshotText = await backend.readFile(CLOUD_PATHS.snapshot)
+      const remoteEntries = remoteSnapshotText === null
+        ? []
+        : (JSON.parse(remoteSnapshotText).entries ?? [])
+
+      const localSnapshot = buildSnapshot({
+        generatedBy: input.generatedBy ?? 'unknown',
+        generatedAt: (input.now ?? new Date()).toISOString(),
+        files,
+      })
+      const diff = diffSnapshots({ entries: remoteEntries }, localSnapshot)
+
+      const snapshotFile = {
+        path: CLOUD_PATHS.snapshot,
+        content: serializeSnapshot({
+          ...localSnapshot,
+          entries: [
+            ...localSnapshot.entries,
+            ...Object.entries(remoteEntries)
+              .filter(([path]) => !localSnapshot.entries.some(e => e.path === path))
+              .map(([, entry]) => entry),
+          ],
+        }),
+      }
+
+      return {
+        files: [...files, snapshotFile],
+        diff,
+        summary: summarizeDiff(diff),
+        patchRows: patch,
+      }
+    },
+
+    /**
+     * 执行推送：把 prepare 的结果写入云端。这一步之后内容对外可见，故须用户确认。
+     * @param {object} plan - preparePush 的返回
+     * @param {string} [message]
+     */
+    async confirmPush(plan, message = '设置漫游：推送') {
+      await backend.ensureReady()
+      for (const file of plan.files) {
+        await backend.writeFile(file.path, file.content)
+      }
+      await backend.push(message)
+      return { pushed: plan.files.map(f => f.path) }
+    },
+
+    /**
+     * 拉取准备：算出云端与本机的差异。**只读，绝不改本机文件。**
+     * @returns {Promise<{diff: object[], summary: object, remoteFiles: object}>}
+     */
+    async preparePull() {
+      await backend.ensureReady()
+      await backend.pull()
+
+      const patchText = await backend.readFile(CLOUD_PATHS.patch)
+      const remoteRows = patchText === null ? [] : parsePatchList(patchText)
+
+      const localRows = readLocalRows()
+      const localEntries = localRows.map(row => ({
+        path: `patch:${row.id}`,
+        kind: 'shared',
+        hash: hashOf(JSON.stringify(row)),
+      }))
+      const remoteEntries = remoteRows.map(row => ({
+        path: `patch:${row.id}`,
+        kind: 'shared',
+        hash: hashOf(JSON.stringify(row)),
+      }))
+
+      const diff = diffSnapshots({ entries: localEntries }, { entries: remoteEntries })
+      return {
+        diff,
+        summary: summarizeDiff(diff),
+        remoteRows,
+        remotePatchText: patchText,
+      }
+    },
+
+    /**
+     * 执行拉取：应用配置、出报告。
+     *
+     * 文件类配置走备份 → 合并 → 写入 → 回读校验（Task 9、10 已有的两条约束）。
+     * @param {object} plan - preparePull 的返回
+     * @param {{backupRoot: string}} options
+     * @returns {Promise<object>} RestoreReport
+     */
+    async applyPull(plan, options) {
+      const applied = []
+      const skipped = []
+
+      if (plan.remoteRows.length > 0) {
+        const result = applyPatchFile({
+          targetFile: patchFile,
+          sharedRows: plan.remoteRows,
+          backupRoot: options?.backupRoot,
+        })
+
+        // 写后回读校验：C2 的落地。警告非空即视为失败，不静默放过。
+        const check = verifyWriteBack(patchFile, plan.remoteRows)
+        if (result.ok && check.ok) {
+          for (const id of result.applied) {
+            applied.push({ kind: 'file', name: `patch:${id}`, result: 'ok' })
+          }
+        } else {
+          for (const id of [...result.warnings, ...check.missing, ...check.mismatch]) {
+            skipped.push({ kind: 'file', name: String(id), result: 'skipped', reason: 'unknown' })
+          }
+        }
+      }
+
+      return {
+        applied,
+        skipped,
+        needsRestart: applied.length > 0,
+        needsCredentials: collectApiKeyRefs(plan.remoteRows),
+        backupPath: options?.backupRoot ?? '',
+      }
+    },
+  }
+}
+```
+
+- [ ] **Step 4: 运行测试，确认通过**
+
+运行：`node --test test/service.test.js`
+预期：PASS，7 个测试通过
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add src/service.js test/service.test.js
+git commit -m "服务：推送与拉取各拆 prepare/confirm 两段，确认点前绝不落盘"
+```
+
+---
+
 ## 验证结论存档
 
 V1 验证的原始脚本与输出，正式化后归档于：
