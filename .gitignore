@@ -21,3 +21,8 @@ pnpm-debug.log*
 # 存放从本机读出的配置内容（即后续准备推送到云端的那份备份），
 # 含 provider 地址、局域网 IP、工作区路径等机器专属信息，绝不进版本库。
 .tmp/
+
+# ── 测试与演练产物 ──
+coverage/
+snapshot-work/
+*.local.yml
