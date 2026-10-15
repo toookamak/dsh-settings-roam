@@ -54,7 +54,7 @@
 | `client.js` | 浏览器半侧：往设置分区贡献一节（不占侧边栏） |
 | `cordis.patch.yml` | 插件自己的装载条目 |
 | `src/` | 全部实现，无构建步骤 |
-| `test/` | 单元测试（107 用例） |
+| `test/` | 单元测试（120 用例） |
 | `scripts/` | 可重复执行的验收脚本 |
 | `docs/superpowers/specs/` | 设计文档 |
 | `docs/superpowers/plans/` | 实现计划与演练记录 |
