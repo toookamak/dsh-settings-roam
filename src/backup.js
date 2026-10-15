@@ -6,7 +6,29 @@
  */
 
 import { mkdirSync, copyFileSync, existsSync, statSync } from 'node:fs'
-import { join, dirname, isAbsolute, relative } from 'node:path'
+import { join, dirname, isAbsolute, parse, relative } from 'node:path'
+
+/**
+ * 备份目录内使用的相对路径。
+ *
+ * 不能写 `relative('/', file)`：在 Windows 上 `relative('/', 'C:\\...')`
+ * 返回的是绝对路径本身（两边盘符/根不同，无法求相对），于是 join 之后
+ * 会生成 `C:\` 这样的嵌套垃圾目录，回退时也找不到文件。
+ * 用 `parse(file).root` 取该路径自己的根（POSIX 为 '/'，Windows 为 'C:\\'
+ * 或 UNC 前缀），再求相对——两个平台都得到干净的层级。
+ *
+ * 保留层级是必需的：不同盘符/根下的同名文件不能互相覆盖。
+ *
+ * @param {string} file
+ * @returns {string}
+ */
+export function backupRelPath(file) {
+  if (!isAbsolute(file)) return file
+  const root = parse(file).root
+  const rel = relative(root, file)
+  // 极端情况（file 恰为根本身）relative 得到空串，会让 join 指到备份目录自身。
+  return rel === '' ? '_root_' : rel
+}
 
 /**
  * 生成时间戳字符串，形如 20261015-120000。
@@ -39,7 +61,7 @@ export function createBackup(input) {
         failed.push({ path: file, error: '文件不存在' })
         continue
       }
-      const rel = isAbsolute(file) ? relative('/', file) : file
+      const rel = backupRelPath(file)
       const dest = join(backupPath, rel)
       mkdirSync(dirname(dest), { recursive: true })
       copyFileSync(file, dest)
@@ -62,7 +84,7 @@ export function restoreFromBackup(info, files) {
   const failed = []
   for (const file of files) {
     try {
-      const rel = isAbsolute(file) ? relative('/', file) : file
+      const rel = backupRelPath(file)
       const src = join(info.backupPath, rel)
       if (!existsSync(src)) {
         failed.push({ path: file, error: '备份中没有这个文件' })
