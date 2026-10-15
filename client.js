@@ -49,6 +49,57 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * 概述区：同步了什么、多少项、落盘在哪。
+     *
+     * 刻意只给概述，不逐项铺开——要看细节应当去打开导出的文件，
+     * 在那里可以逐字核对。界面铺开长清单既挤占空间，也不如文件好用。
+     * 所以这里的每个数字都配一条「在哪能看」的路径。
+     */
+    function Overview({ state, actions }) {
+      const o = state?.overview
+      if (!o) return null
+      return h(
+        'div',
+        { className: 'roam-overview' },
+        h('div', { className: 'roam-overview-title' }, o.title),
+        h(
+          'div',
+          { className: 'roam-overview-stats' },
+          o.stats.map(s => h(
+            'div',
+            { className: 'roam-stat', key: s.label },
+            h('span', { className: 'roam-stat-value' }, String(s.value)),
+            h('span', { className: 'roam-stat-label' }, s.label),
+          )),
+        ),
+        // 时间与来源：判断「这份是不是我刚才那次」的依据
+        o.meta?.length
+          ? h(
+            'div',
+            { className: 'roam-overview-meta' },
+            o.meta.map(m => h('div', { className: 'roam-meta-line', key: m }, m)),
+          )
+          : null,
+        // 落盘路径：用户据此去打开核对。可点则给出动作，否则纯文本。
+        o.location
+          ? h(
+            'div',
+            { className: 'roam-overview-location' },
+            h('span', { className: 'roam-location-label' }, '详情在这些文件里：'),
+            h('span', { className: 'roam-location-path' }, o.location),
+            actions?.onOpenExport
+              ? h('button', {
+                type: 'button',
+                className: 'roam-open',
+                onClick: () => actions.onOpenExport(o.location),
+              }, '打开')
+              : null,
+          )
+          : null,
+      )
+    }
+
     /** 设置分区本体。 */
     function Section({ state, actions }) {
       const skipped = state?.skipped ?? []
@@ -56,6 +107,7 @@ window.__ModuleLoader__.load({
         'div',
         { className: 'roam-section' },
         h(StatusLine, { state }),
+        h(Overview, { state, actions }),
         skipped.length > 0
           ? h(
             'div',
@@ -72,6 +124,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { Section, StatusLine }
+    return { Section, StatusLine, Overview }
   },
 })

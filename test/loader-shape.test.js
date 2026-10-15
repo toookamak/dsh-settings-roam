@@ -192,3 +192,221 @@ test('跳过项渲染的是说明文字，不是失败计数（§3.4）', async 
   assert.ok(flat.includes('发布到 registry'), '必须给出可行动的说明')
   assert.ok(!/失败\s*\d+|skip count/i.test(flat), '不得退化成失败计数')
 })
+
+test('概述区给出统计、来源与落盘位置，但不铺开逐项清单', async () => {
+  let exported = null
+  globalThis.window = {
+    __ModuleLoader__: {
+      load: ({ factory }) => {
+        exported = factory(() => ({
+          createElement: (type, props, ...children) => ({ type, props, children }),
+        }))
+      },
+    },
+  }
+  try {
+    await import(`../client.js?ov=${Date.now()}`)
+  } finally {
+    delete globalThis.window
+  }
+
+  const state = {
+    kind: 'clean',
+    overview: {
+      title: '上次推送',
+      stats: [
+        { label: '公共配置', value: 1 },
+        { label: '技能', value: 3 },
+        { label: '插件', value: 12 },
+      ],
+      meta: ['2026-10-15 12:00', '来自 machine-a'],
+      location: '/home/u/.dsh/settings-roam/export/2026-10-15-120000',
+    },
+  }
+
+  const el = exported.Overview({ state })
+  const flat = JSON.stringify(el)
+
+  assert.ok(flat.includes('上次推送'), '要有标题')
+  assert.ok(flat.includes('公共配置'), '要有统计项')
+  assert.ok(flat.includes('machine-a'), '要能看出这份来自哪台机器')
+  assert.ok(
+    flat.includes('export/2026-10-15-120000'),
+    '要给出真实落盘路径 —— 用户据此去打开核对',
+  )
+})
+
+test('没有概述数据时不渲染空区块', async () => {
+  let exported = null
+  globalThis.window = {
+    __ModuleLoader__: {
+      load: ({ factory }) => {
+        exported = factory(() => ({
+          createElement: (type, props, ...children) => ({ type, props, children }),
+        }))
+      },
+    },
+  }
+  try {
+    await import(`../client.js?ov2=${Date.now()}`)
+  } finally {
+    delete globalThis.window
+  }
+
+  assert.equal(exported.Overview({ state: {} }), null)
+  assert.equal(exported.Overview({ state: undefined }), null)
+})
+
+test('概述区提供「打开」动作时带出路径', async () => {
+  let exported = null
+  globalThis.window = {
+    __ModuleLoader__: {
+      load: ({ factory }) => {
+        exported = factory(() => ({
+          createElement: (type, props, ...children) => ({ type, props, children }),
+        }))
+      },
+    },
+  }
+  try {
+    await import(`../client.js?ov3=${Date.now()}`)
+  } finally {
+    delete globalThis.window
+  }
+
+  const opened = []
+  const state = {
+    overview: { title: 't', stats: [], location: '/x/y' },
+  }
+  const el = exported.Overview({ state, actions: { onOpenExport: p => opened.push(p) } })
+
+  // 按钮在 location 区块内部，不是 Overview 的直接子元素
+  const loc = el.children.find(c => c?.props?.className === 'roam-overview-location')
+  assert.ok(loc, '应有落盘位置区块')
+  const button = loc.children.find(c => c?.props?.className === 'roam-open')
+  assert.ok(button, '给了 onOpenExport 就该渲染打开按钮')
+  button.props.onClick()
+  assert.deepEqual(opened, ['/x/y'])
+})
+
+test('没有 onOpenExport 时不渲染打开按钮 —— 不给出点了没反应的控件', async () => {
+  let exported = null
+  globalThis.window = {
+    __ModuleLoader__: {
+      load: ({ factory }) => {
+        exported = factory(() => ({
+          createElement: (type, props, ...children) => ({ type, props, children }),
+        }))
+      },
+    },
+  }
+  try {
+    await import(`../client.js?ov4=${Date.now()}`)
+  } finally {
+    delete globalThis.window
+  }
+
+  const el = exported.Overview({ state: { overview: { title: 't', stats: [], location: '/x/y' } } })
+  const flat = JSON.stringify(el)
+  assert.ok(flat.includes('/x/y'), '路径仍要显示出来，让用户能自己找过去')
+  assert.ok(!flat.includes('"roam-open"'), '但不应有无效按钮')
+})
+
+// ─── 概述显示（用户要求「页面上要有概述」）────────────────────────────
+// 取向：只给概述，不铺开逐项清单。要看细节去打开导出的文件。
+
+test('概述渲染计数与「去哪看详情」的路径', async () => {
+  let exported = null
+  globalThis.window = {
+    __ModuleLoader__: {
+      load: ({ factory }) => {
+        exported = factory(() => ({
+          createElement: (type, props, ...children) => ({ type, props, children }),
+        }))
+      },
+    },
+  }
+  try {
+    await import(`../client.js?ov=${Date.now()}`)
+  } finally {
+    delete globalThis.window
+  }
+
+  const state = {
+    overview: {
+      title: '本次将同步',
+      stats: [
+        { label: '公共配置', value: 1 },
+        { label: '技能', value: 2 },
+        { label: '插件', value: 3 },
+      ],
+      meta: ['2026-10-15 09:07', '来自 machine-a'],
+      location: '/x/export/1',
+    },
+  }
+  const flat = JSON.stringify(exported.Overview({ state }))
+
+  assert.ok(flat.includes('本次将同步'), '要有标题')
+  assert.ok(flat.includes('公共配置') && flat.includes('技能') && flat.includes('插件'), '三类计数都要有')
+  assert.ok(flat.includes('2026-10-15 09:07'), '要有时间')
+  assert.ok(flat.includes('machine-a'), '要标明来源机器')
+  assert.ok(flat.includes('/x/export/1'), '要给出详情所在路径')
+})
+
+test('概述只给概述 —— 不把逐项文件清单铺进界面', async () => {
+  let exported = null
+  globalThis.window = {
+    __ModuleLoader__: {
+      load: ({ factory }) => {
+        exported = factory(() => ({
+          createElement: (type, props, ...children) => ({ type, props, children }),
+        }))
+      },
+    },
+  }
+  try {
+    await import(`../client.js?ov2=${Date.now()}`)
+  } finally {
+    delete globalThis.window
+  }
+
+  const state = {
+    overview: {
+      title: '本次将同步',
+      stats: [{ label: '技能', value: 2 }],
+      meta: [],
+      location: '/x/export/1',
+      // 即便宿主多传了文件清单，界面也不应逐项铺开
+      files: [
+        { path: 'skills/one/SKILL.md' },
+        { path: 'skills/two/SKILL.md' },
+        { path: 'skills/three/SKILL.md' },
+      ],
+    },
+  }
+  const flat = JSON.stringify(exported.Overview({ state }))
+
+  assert.ok(!flat.includes('skills/one'), '不逐项列出文件路径')
+  assert.ok(!flat.includes('skills/three'), '不逐项列出文件路径')
+})
+
+test('没有概述数据时不渲染区块 —— 不给空壳', async () => {
+  let exported = null
+  globalThis.window = {
+    __ModuleLoader__: {
+      load: ({ factory }) => {
+        exported = factory(() => ({
+          createElement: (type, props, ...children) => ({ type, props, children }),
+        }))
+      },
+    },
+  }
+  try {
+    await import(`../client.js?ov3=${Date.now()}`)
+  } finally {
+    delete globalThis.window
+  }
+
+  assert.equal(exported.Overview({ state: {} }), null)
+  assert.equal(exported.Overview({ state: { overview: null } }), null)
+})

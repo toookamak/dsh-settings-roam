@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { resolveDshHome } from './src/home-paths.js'
 import { createGitBackend } from './src/backends/git.js'
 import { createSyncService } from './src/service.js'
+import { buildPushOverview } from './src/overview.js'
 
 export const name = 'settings-roam'
 
@@ -72,6 +73,27 @@ export function apply(ctx, config) {
     service,
     dshRoot,
     configured: service.isConfigured(),
+
+    /**
+     * 推送并导出可供核对的文件。
+     *
+     * 为什么在宿主侧提供一个组合动作，而不是让界面自己拼：
+     * 界面（浏览器半侧）不能 import 宿主模块，也无法访问文件系统，
+     * 它只能拿到已经算好的结果。所以「算推送计划 → 导出到磁盘 → 生成概述」
+     * 这三步必须在宿主侧一次完成，把概述交给界面显示。
+     *
+     * 导出目录默认放在数据根目录下，用户不必配置；导出失败不阻断推送
+     * （导出是给人看的副本，不是同步本身，见 src/export.js 的取舍说明）。
+     *
+     * @param {{generatedBy?: string, exportRoot?: string, bundles?: object}} [input]
+     */
+    async pushWithExport(input = {}) {
+      const plan = await service.preparePush({
+        ...input,
+        exportRoot: input.exportRoot ?? service.defaultExportRoot(),
+      })
+      return { plan, overview: buildPushOverview(plan) }
+    },
   })
 
   ctx.logger?.info?.(

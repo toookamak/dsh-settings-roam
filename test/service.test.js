@@ -420,3 +420,67 @@ test('调用方显式传入的 bundles 优先于采集结果', async () => {
   assert.deepEqual(parsed.official, ['explicit'], '显式传入应覆盖采集')
   rmSync(root, { recursive: true })
 })
+
+// ─── 文件确实落出来（导出到磁盘）────────────────────────────────────
+// 背景：推送此前是「内存里转一圈就写云端」，用户看不到究竟带走了什么。
+
+test('给了 exportRoot 就把待同步内容真实落到磁盘', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const exportRoot = join(root, 'export')
+  const service = createSyncService({ backend: fakeBackend(), workDir, dshRoot, skillsRoot })
+
+  const plan = await service.preparePush({
+    generatedBy: 'machine-a',
+    exportRoot,
+    stamp: 's1',
+  })
+
+  assert.ok(plan.exported, '应产出导出结果')
+  assert.equal(plan.exported.error, undefined)
+  assert.ok(existsSync(join(plan.exported.exportPath, 'config', 'profile.patch.yml')))
+  assert.ok(existsSync(join(plan.exported.exportPath, '概要.md')))
+  rmSync(root, { recursive: true })
+})
+
+test('不给 exportRoot 就不导出 —— 默认只读，不擅自写盘', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({ backend: fakeBackend(), workDir, dshRoot, skillsRoot })
+
+  const plan = await service.preparePush({ generatedBy: 'test' })
+  assert.equal(plan.exported, null)
+  rmSync(root, { recursive: true })
+})
+
+test('导出失败不阻断推送 —— 导出是给人看的副本', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  // 把 exportRoot 指到一个「是文件不是目录」的路径，制造必然失败
+  const blocked = join(root, 'not-a-dir')
+  writeFileSync(blocked, 'x')
+  const service = createSyncService({ backend: fakeBackend(), workDir, dshRoot, skillsRoot })
+
+  const plan = await service.preparePush({
+    generatedBy: 'test',
+    exportRoot: blocked,
+    stamp: 's1',
+  })
+
+  assert.ok(plan.exported.error, '应记录失败原因')
+  assert.ok(plan.files.length > 0, '推送准备本身仍应成功')
+  rmSync(root, { recursive: true })
+})
+
+test('导出的公共配置与本机项隔离 —— 局域网地址不落进导出', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const exportRoot = join(root, 'export')
+  const service = createSyncService({ backend: fakeBackend(), workDir, dshRoot, skillsRoot })
+
+  const plan = await service.preparePush({ generatedBy: 'machine-a', exportRoot, stamp: 's2' })
+  const patchText = readFileSync(
+    join(plan.exported.exportPath, 'config', 'profile.patch.yml'),
+    'utf8',
+  )
+
+  assert.ok(patchText.includes('llm-pi-ai'), '公共条目应被带走')
+  assert.ok(!patchText.includes('10.0.0.9'), '本机监听地址绝不能出现在导出里')
+  rmSync(root, { recursive: true })
+})

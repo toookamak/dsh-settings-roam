@@ -22,6 +22,8 @@ import { diffSnapshots, summarizeDiff } from './diff.js'
 import { applyPatchFile, verifyWriteBack } from './apply.js'
 import { scanSkills, listSkillNames, crossCheckSkills } from './skills.js'
 import { collectBundles } from './bundles.js'
+import { exportForReview } from './export.js'
+import { timestamp } from './backup.js'
 import { assertBackend } from './backends/index.js'
 
 /** 云端布局，见设计 §5.1。 */
@@ -283,12 +285,33 @@ export function createSyncService(config) {
         }),
       }
 
+      // 导出到磁盘供核对：调用方指定 exportRoot 才导。
+      // 这是「文件确实落出来」的落地——用户能直接打开看到带走了什么，
+      // 而不是只能从界面上的数字去猜。
+      let exported = null
+      if (input.exportRoot !== undefined && input.exportRoot !== null) {
+        try {
+          exported = exportForReview({
+            files,
+            exportRoot: input.exportRoot,
+            stamp: input.stamp ?? timestamp(input.now ?? new Date()),
+            generatedAt: (input.now ?? new Date()).toISOString(),
+            generatedBy: input.generatedBy ?? 'unknown',
+            summary: summarizeDiff(diff),
+          })
+        } catch (error) {
+          // 导出失败不该阻断推送：导出是给人看的副本，不是同步本身。
+          exported = { error: String(error?.message ?? error) }
+        }
+      }
+
       return {
         files: [...files, snapshotFile],
         diff,
         summary: summarizeDiff(diff),
         patchRows: patch,
         skillCheck,
+        exported,
       }
     },
 
@@ -404,5 +427,17 @@ export function createSyncService(config) {
 
     /** 数据根目录，供界面与诊断显示。 */
     dshRoot,
+
+    /**
+     * 默认导出目录。
+     *
+     * 导出目录的默认值归服务层定，不归界面定：界面是浏览器半侧，
+     * 它拿不到（也不该去猜）DSH 数据根目录在哪。这里给出来，
+     * 界面只管用。
+     * @returns {string}
+     */
+    defaultExportRoot() {
+      return join(dshRoot, 'settings-roam', 'export')
+    },
   }
 }
