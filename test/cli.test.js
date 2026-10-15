@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { writeFileSync, mkdirSync, rmSync, existsSync, readdirSync } from 'node:fs'
+import { writeFileSync, mkdirSync, rmSync, existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -188,4 +188,98 @@ test('真跑 CLI：help 退出码为 0', () => {
   const result = spawnSync(process.execPath, [BIN, 'help'], { encoding: 'utf8' })
   assert.equal(result.status, 0)
   assert.match(result.stdout, /设置漫游/)
+})
+
+// ─── 导入：命令行这一侧也要守住「先看后写」 ──────────────────────
+
+/** 造一台目标机器：它有自己的监听地址。 */
+function targetMachine(root) {
+  const dshRoot = join(root, 'target')
+  const dir = join(dshRoot, 'profiles', 'web')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'cordis.patch.yml'), [
+    '- id: webserver',
+    '  config:',
+    "    host: '127.0.0.1'",
+    '',
+  ].join('\n'))
+  return { dshRoot, patchFile: join(dir, 'cordis.patch.yml') }
+}
+
+test('真跑 CLI：import 不给目录时退出码为 2，并说明该给什么', () => {
+  const result = spawnSync(process.execPath, [BIN, 'import'], { encoding: 'utf8' })
+  assert.equal(result.status, 2)
+  assert.match(result.stderr, /import <目录>/)
+})
+
+test('真跑 CLI：import 不加 --yes 时只打印计划，本机一个字节都不动', () => {
+  const { root, dshRoot } = sandbox()
+  const outDir = join(root, 'out')
+  execFileSync(process.execPath, [BIN, '--dsh-home', dshRoot, 'export', outDir], { encoding: 'utf8' })
+
+  const target = targetMachine(root)
+  const before = readFileSync(target.patchFile, 'utf8')
+  const result = spawnSync(
+    process.execPath,
+    [BIN, '--dsh-home', target.dshRoot, 'import', outDir],
+    { encoding: 'utf8' },
+  )
+
+  assert.equal(result.status, 0)
+  assert.match(result.stdout, /本机还没有任何改动/)
+  assert.match(result.stdout, /不会写回本机/)
+  assert.equal(readFileSync(target.patchFile, 'utf8'), before, '没加 --yes 就不该写')
+  rmSync(root, { recursive: true })
+})
+
+test('真跑 CLI：import --yes 写回公共项，目标机器的监听地址保持自己的值', () => {
+  const { root, dshRoot } = sandbox()
+  const outDir = join(root, 'out')
+  execFileSync(process.execPath, [BIN, '--dsh-home', dshRoot, 'export', outDir], { encoding: 'utf8' })
+
+  const target = targetMachine(root)
+  const result = spawnSync(
+    process.execPath,
+    [BIN, '--dsh-home', target.dshRoot, 'import', outDir, '--yes'],
+    { encoding: 'utf8' },
+  )
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /已写入/)
+  assert.match(result.stdout, /备份到/)
+
+  const written = readFileSync(target.patchFile, 'utf8')
+  assert.ok(written.includes('llm-pi-ai'), '公共配置应当写了进来')
+  assert.ok(written.includes('127.0.0.1'), '目标机器自己的监听地址必须还在')
+  assert.ok(!written.includes('10.0.0.9'), '来源机器的地址绝不该被带过来')
+  rmSync(root, { recursive: true })
+})
+
+test('真跑 CLI：import --json 输出里带 dryRun 标记，便于脚本区分', () => {
+  const { root, dshRoot } = sandbox()
+  const outDir = join(root, 'out')
+  execFileSync(process.execPath, [BIN, '--dsh-home', dshRoot, 'export', outDir], { encoding: 'utf8' })
+
+  const target = targetMachine(root)
+  const out = execFileSync(
+    process.execPath,
+    [BIN, '--dsh-home', target.dshRoot, 'import', outDir, '--json'],
+    { encoding: 'utf8' },
+  )
+  const parsed = JSON.parse(out)
+  assert.equal(parsed.dryRun, true)
+  assert.ok(parsed.willWrite.includes('patch:llm-pi-ai'))
+  assert.ok(parsed.willNotWrite.some(item => item.name === 'webserver'))
+  rmSync(root, { recursive: true })
+})
+
+test('真跑 CLI：目录里没有导出包时退出码为 1，并说清缺的是什么', () => {
+  const { root } = sandbox()
+  const empty = join(root, 'not-a-package')
+  mkdirSync(empty, { recursive: true })
+  const result = spawnSync(process.execPath, [BIN, 'import', empty], { encoding: 'utf8' })
+
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /manifest\.json/)
+  rmSync(root, { recursive: true })
 })

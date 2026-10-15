@@ -26,12 +26,14 @@ import { resolveDshHome } from '../src/home-paths.js'
 import { createSyncService } from '../src/service.js'
 import { createGitBackend } from '../src/backends/git.js'
 import { buildPushOverview } from '../src/overview.js'
+import { buildReportView, explainSkip } from '../src/report.js'
 
 const USAGE = `设置漫游 —— 把一台机器的 DSH 配置搬到另一台
 
 用法：
   dsh-settings-roam inspect           取一次配置并打印摘要（只读，不写任何地方）
   dsh-settings-roam export [目录]     取一次配置并导出到磁盘，供打开核对
+  dsh-settings-roam import <目录>     读一份导出包（默认只算计划，不动本机）
   dsh-settings-roam doctor            检查数据根目录、云端仓库配置是否齐备
   dsh-settings-roam help              显示这份帮助
 
@@ -39,20 +41,27 @@ const USAGE = `设置漫游 —— 把一台机器的 DSH 配置搬到另一台
   --dsh-home <路径>   覆盖 DSH 数据根目录（默认 $DSH_HOME 或 ~/.dsh）
   --profile <名字>    指定要同步哪个 profile（默认自动判断唯一的一个）
   --repo <地址>       云端 git 仓库地址（未配置时 export 仍可用）
+  --yes, -y           import 时真正写入；不加时只打印计划
   --json              以 JSON 输出，便于脚本处理
 
 说明：
   inspect 与 export 都不需要云端仓库——第一阶段的目标是「能取到配置」，
-  没有网络也应当可用。涉及云端的动作会在后续阶段补上。
+  没有网络也应当可用。
+
+  import 刻意分两步：先只算一遍「会改什么」给你看，加上 --yes 才真的写。
+  写入前会把被覆盖的文件备份下来，报告里给出备份路径。
+  包里的本机项（监听地址、主题、默认模型这类）一律不写回——
+  这台机器保持它自己的值。
 `
 
 /** 极简参数解析。刻意不引第三方库：这个入口要能在任何环境直接跑起来。 */
 export function parseArgs(argv) {
-  const options = { json: false }
+  const options = { json: false, yes: false }
   const rest = []
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]
     if (arg === '--json') options.json = true
+    else if (arg === '--yes' || arg === '-y') options.yes = true
     else if (arg === '--dsh-home') options.dshHome = argv[++i]
     else if (arg === '--repo') options.repo = argv[++i]
     else if (arg === '--profile') options.profile = argv[++i]
@@ -172,6 +181,108 @@ async function cmdDoctor({ service, dshRoot }, options) {
   return 0
 }
 
+/**
+ * 导入：先算计划给人看，加 --yes 才真的写。
+ *
+ * 为什么命令行也要两步
+ * ────────────────────
+ * 按设计 §3.2，写入本机配置是一次需要人过目的动作。界面上那一步是「点确认」，
+ * 命令行上就该是「加 --yes」——如果这里一步写完，那这条纪律就只剩界面在遵守，
+ * 而界面恰恰是最容易被绕开的那一层。
+ *
+ * 不加 --yes 时**一个字节都不写**，并且明说这件事，免得用户以为已经导进去了。
+ */
+async function cmdImport({ service }, options) {
+  const packageDir = options.args[0]
+  if (packageDir === undefined) {
+    console.error('请给出要导入的包目录：dsh-settings-roam import <目录>')
+    console.error('运行 dsh-settings-roam help 查看用法。')
+    return 2
+  }
+
+  let plan
+  try {
+    plan = await service.prepareImport({ packageDir })
+  } catch (error) {
+    console.error(`这份包不能用：${error?.message ?? error}`)
+    return 1
+  }
+
+  if (options.json && options.yes !== true) {
+    console.log(JSON.stringify({
+      packageDir: plan.packageDir,
+      generatedAt: plan.generatedAt,
+      generatedBy: plan.generatedBy,
+      empty: plan.empty,
+      willWrite: plan.patchRows.map(row => `patch:${row.id}`).concat(plan.skillFiles.map(f => f.path)),
+      willNotWrite: plan.refused,
+      summary: plan.summary,
+      dryRun: true,
+    }, null, 2))
+    return 0
+  }
+
+  if (!options.json) {
+    console.log(`包目录：${plan.packageDir}`)
+    if (plan.generatedAt) console.log(`导出时间：${plan.generatedAt}（来自 ${plan.generatedBy ?? '未知'}）`)
+    console.log('')
+
+    if (plan.empty) {
+      console.log('这份包里没有需要写回本机的内容。')
+    } else {
+      console.log(`将写入本机：${plan.patchRows.length + plan.skillFiles.length} 项`)
+      for (const row of plan.patchRows) console.log(`  + 配置 ${row.id}`)
+      for (const file of plan.skillFiles) console.log(`  + 技能 ${file.path}`)
+    }
+
+    if (plan.refused.length > 0) {
+      console.log('')
+      console.log(`不会写回本机：${plan.refused.length} 项`)
+      for (const item of plan.refused) {
+        console.log(`  · ${explainSkip({ ...item, name: item.name ?? item.path })}`)
+      }
+    }
+  }
+
+  if (options.yes !== true) {
+    if (options.json) return 0
+    console.log('')
+    console.log('以上只是计划，本机还没有任何改动。确认无误后加上 --yes 再执行一次。')
+    return 0
+  }
+
+  const report = await service.applyImport(plan)
+  const view = buildReportView(report)
+
+  if (options.json) {
+    console.log(JSON.stringify({ packageDir: plan.packageDir, ...report, view }, null, 2))
+    return 0
+  }
+
+  console.log('')
+  console.log(`已写入 ${report.applied.length} 项。`)
+  for (const item of report.applied) console.log(`  ✓ ${item.name}`)
+
+  if (view.skipped.length > 0) {
+    console.log('')
+    console.log(`${view.skipped.length} 项没有写回本机（这不是失败）：`)
+    for (const item of view.skipped) {
+      console.log(`  · ${explainSkip({ ...item, name: item.name ?? item.path })}`)
+    }
+  }
+
+  for (const notice of view.notices) {
+    console.log('')
+    console.log(`注意：${notice}`)
+  }
+
+  if (report.backupPath !== '') {
+    console.log('')
+    console.log(`覆盖前的原件已备份到：${report.backupPath}`)
+  }
+  return 0
+}
+
 async function main(argv) {
   const parsed = parseArgs(argv)
   if (parsed.options.help || parsed.command === 'help') {
@@ -179,7 +290,7 @@ async function main(argv) {
     return 0
   }
 
-  const commands = { inspect: cmdInspect, export: cmdExport, doctor: cmdDoctor }
+  const commands = { inspect: cmdInspect, export: cmdExport, import: cmdImport, doctor: cmdDoctor }
   const run = commands[parsed.command]
   if (!run) {
     console.error(`未知命令：${parsed.command}`)
