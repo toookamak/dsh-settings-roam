@@ -272,3 +272,60 @@ assert.ok(existsSync(join(report.backupPath, join(dshRoot, 'cordis.patch.yml')))
 这类问题如果不在真装配环境里跑一次，会一直潜伏到用户安装时才爆发。为此新增
 `test/apply-host.test.js`（12 例）：用一个「读未注入属性就抛错」的假 ctx 把这条纪律固化下来，
 不必每次启动 DSH 才能发现。
+
+## 十二、界面实装核对（用户报告「很丑、点了没反应」之后）
+
+用户装上后反馈：设置页很丑，而且点完没什么反应。用真浏览器（`scripts/ui-preview.mjs` 起的隔离实例，
+不碰用户正在用的 profile）复现，确认两件事都成立，并各定位到根因。
+
+### 12.1 「很丑」：没有用宿主的设计系统
+
+复现截图里整节是裸 `div` 加浏览器默认样式的 `<button>`（灰底、2px 凸起边框、极小字号），
+而旁边的官方分区用的是 CSS Module 类名。原因是 `client.js` 自己用 `h('div')`／`h('button')` 糊界面。
+
+修法：改用宿主的 `@deepseek-ai/dsh-client-ui-primitives`（它已在 web bundle 的 boot manifest 里，
+`require` 能解析到），并注入一张只用 `--dsw-*` 令牌的样式表。令牌来源是官方的
+`packages/client/ui-theme/src/styles/design-platform.css`；`packages/client/ui-settings-models/src/client/ModelsSection.module.css`
+的文件头明确警告：裸 `--border`／`--surface`／`--text-*` 在本应用里无定义，会落到浅色字面量 fallback
+并在深色主题下仍是浅色。取值前逐个 grep 过，没有照抄名字凭印象写。
+
+### 12.2 「点了没反应」：三处独立的接线错误
+
+| # | 缺陷 | 表现 | 为什么看不见 |
+|---|---|---|---|
+| 1 | 配置表单**不会**自动出现 | 用户没有地方填仓库地址，按钮永远停在「还没配置云端仓库」 | 装了 `Config` schema 只让条目出现在 `ctx.settings.describe()` 里。官方设置外壳不给分区内容画任何 chrome（`packages/client/ui-settings-general/src/client/shell-contract.ts:24-28` 只传 `{id, order, label}`），全仓库也没有任何「schema → 表单」渲染器。表单必须插件自己接 `ctx.configForms` 画 |
+| 2 | `exports.inject` 写成了函数 | 浏览器里挂不上，单元测试与真装载都照样通过 | 官方一律是**字符串数组**（`packages/client/ui-settings-plugins/src/client/index.ts:28` `export const inject = ['slots','locale']`），它声明「要用到哪些客户端服务」，由注入器在挂载前解析。模块加载器会**接受**一个函数，只是拿不到依赖声明 |
+| 3 | `locale/*.json` 写了却从未登记 | 分区标题退化成键名 | 没有任何地方调 `ctx.locale.register`。官方写法是 `ctx.locale.bind(NS)` + `ctx.effect(() => ctx.locale.register(NS, {zh, en}), …)` |
+
+附带一条：宿主语言服务查的是**扁平键**（`packages/client/locale/src/client/index.ts` 的 `lookup` 直接 `dict[key]`，不做点号下钻），
+所以登记前要 flatten 一次；嵌套结构只留给宿主侧插件清单读 `meta.title`／`meta.description` 用。
+
+### 12.3 保存之后界面不刷新（用户第二次反馈的「点完没反应」）
+
+预览实例里填上仓库地址并失焦，配置确实写进了 `cordis.patch.yml`（绿色「已保存。」也出现了），
+但状态行仍显示「还没配置云端仓库」、两颗按钮仍是禁用——因为 `SectionContainer` 只在挂载时取过一次状态。
+用户看到的是「已保存」和两个点不动的按钮并存，合理结论就是「保存没生效」。
+
+修法：`ConfigCard` 提交成功后回调 `onSaved`，由 `SectionContainer` 重新取一次状态
+（写配置会让宿主重新组合插件，新地址要等这一轮走完才反映到状态里，所以立刻取一次、1.2 秒后再取一次）。
+反向对照也锁进了测试：写入被拒时不得刷新——那会让界面显示「宿主已接受」，而实际什么都没落盘。
+
+### 12.4 两个验收脚本自身的缺陷（比插件的缺陷更值得记）
+
+| # | 缺陷 | 后果 |
+|---|---|---|
+| 1 | `verify-load.mjs` 先手写 manifest 的 `link:` 依赖，再调 `dsh plugin add` | `plugin add` 只在「依赖名在装之前不存在」时才把它追加进 `dsh.profile.bundles`（`packages/boot/plugin-manager/src/operations.ts:93` `if (beforeDeps.has(name)) continue`），于是插件既不进 bundles 也不进组合树。**一个由验收脚本自己制造的假故障，看起来却像插件坏了** |
+| 2 | `verify-load.mjs` 不传 `--port` | DSH 的缺省端口是 3080（`packages/bundle/web-app/cordis.patch.yml:184` `ctx.webStartup.port ?? 3080`），而本机可能正有实例在监听同一端口。实测那一次验收请求打到了另一个实例上，返回 404；更坏的情况下会**往别人的数据根里写导出文件**。已改为先用 `node:net` 要一个空闲端口再显式传入 |
+
+这两条与插件代码无关，但它们说明一件事：**验收脚本本身也是被测对象**。
+一个会打到别的实例上的脚本，给出的结论比没有验收更危险——它看起来是通过或失败得有理由，
+实际量的是别的东西。
+
+### 12.5 本节的验收结果
+
+| 项目 | 结果 |
+|---|---|
+| 单元测试 | 260 通过（`loader-shape` 由 21 例增至 57 例） |
+| 真装载验收 | 7 项全过，含「是否被登记为 profile 层」「设置页会不会出现配置表单（4 字段）」 |
+| 端到端演练 | 34/34 |
+| 浏览器人工核对 | 界面用上宿主组件与令牌；填写地址并失焦后落盘、状态行与按钮当即更新（截图存 `.tmp/04-ui/`） |
