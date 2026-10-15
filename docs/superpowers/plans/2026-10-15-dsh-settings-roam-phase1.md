@@ -105,7 +105,7 @@ test/backends-git.test.js            git 后端测试（用本地裸库，不碰
 - Create: `test/smoke.test.js`
 - Modify: `.gitignore`（新增 `coverage/`、`snapshot-work/`）
 
-- [ ] **Step 1: 创建 `package.json`**
+ - [x] **Step 1: 创建 `package.json`**
 
 ```json
 {
@@ -147,7 +147,7 @@ test/backends-git.test.js            git 后端测试（用本地裸库，不碰
 }
 ```
 
-- [ ] **Step 2: 写第一个失败测试**
+ - [x] **Step 2: 写第一个失败测试**
 
 创建 `test/smoke.test.js`：
 
@@ -164,14 +164,14 @@ test('package.json 声明了插件身份与 patch 挂载点', () => {
 })
 ```
 
-- [ ] **Step 3: 运行测试，确认失败**
+ - [x] **Step 3: 运行测试，确认失败**
 
 运行：`node --test test/smoke.test.js`
 预期：FAIL，报 `ENOENT: no such file or directory`（`package.json` 的路径能读到，但断言会通过——若已创建则此步通过，继续下一步）
 
 若已通过，说明 `package.json` 已建好，符合预期。
 
-- [ ] **Step 4: 补 `.gitignore`**
+ - [x] **Step 4: 补 `.gitignore`**
 
 在 `.gitignore` 末尾追加：
 
@@ -182,12 +182,12 @@ snapshot-work/
 *.local.yml
 ```
 
-- [ ] **Step 5: 运行全部测试**
+ - [x] **Step 5: 运行全部测试**
 
 运行：`npm test`
 预期：PASS，1 个测试通过
 
-- [ ] **Step 6: 提交**
+ - [x] **Step 6: 提交**
 
 ```bash
 git add package.json test/smoke.test.js .gitignore
@@ -202,7 +202,7 @@ git commit -m "脚手架：插件清单与测试环境"
 - Create: `src/ownership.js`
 - Test: `test/ownership.test.js`
 
-- [ ] **Step 1: 写失败测试**
+ - [x] **Step 1: 写失败测试**
 
 创建 `test/ownership.test.js`：
 
@@ -252,12 +252,12 @@ test('未知项默认为不同步（保守失败）', () => {
 })
 ```
 
-- [ ] **Step 2: 运行测试，确认失败**
+ - [x] **Step 2: 运行测试，确认失败**
 
 运行：`node --test test/ownership.test.js`
 预期：FAIL，`Cannot find module '../src/ownership.js'`
 
-- [ ] **Step 3: 实现归属表**
+ - [x] **Step 3: 实现归属表**
 
 创建 `src/ownership.js`：
 
@@ -348,12 +348,12 @@ export function ownershipOf(kind, name) {
 }
 ```
 
-- [ ] **Step 4: 运行测试，确认通过**
+ - [x] **Step 4: 运行测试，确认通过**
 
 运行：`node --test test/ownership.test.js`
 预期：PASS，6 个测试通过
 
-- [ ] **Step 5: 提交**
+ - [x] **Step 5: 提交**
 
 ```bash
 git add src/ownership.js test/ownership.test.js
@@ -370,7 +370,7 @@ git commit -m "归属表：patch 条目、文件、技能、插件名单的四�
 - Create: `src/yaml-loader.js`
 - Test: `test/yaml-loader.test.js`
 
-- [ ] **Step 1: 写失败测试**
+ - [x] **Step 1: 写失败测试**
 
 创建 `test/yaml-loader.test.js`：
 
@@ -489,12 +489,12 @@ test('往返保真：原文解析 → 渲染 → 再解析，语义等价', () =
 })
 ```
 
-- [ ] **Step 2: 运行测试，确认失败**
+ - [x] **Step 2: 运行测试，确认失败**
 
 运行：`node --test test/yaml-loader.test.js`
 预期：FAIL，`Cannot find module '../src/yaml-loader.js'`
 
-- [ ] **Step 3: 实现方言通道**
+ - [x] **Step 3: 实现方言通道**
 
 创建 `src/yaml-loader.js`：
 
@@ -616,14 +616,14 @@ export function mergeSharedInto(targetRows, sharedRows, options = {}) {
 }
 ```
 
-- [ ] **Step 4: 运行测试，确认通过**
+ - [x] **Step 4: 运行测试，确认通过**
 
 运行：`node --test test/yaml-loader.test.js`
 预期：PASS，8 个测试通过
 
 若 `C3` 用例失败，原因是 `applyEntryPatches` 的 `name` 匹配（实测规则二）——检查测试样本里目标行与 patch 的 `name` 是否都有且一致。
 
-- [ ] **Step 5: 提交**
+ - [x] **Step 5: 提交**
 
 ```bash
 git add src/yaml-loader.js test/yaml-loader.test.js
@@ -646,7 +646,7 @@ git commit -m "方言通道：按条目切分、渲染、合并写回，落地 C
 - Create: `src/bundles.js`
 - Test: `test/bundles.test.js`
 
-- [ ] **Step 1: 写失败测试**
+ - [x] **Step 1: 写失败测试**
 
 创建 `test/bundles.test.js`：
 
@@ -701,12 +701,12 @@ test('插件名单只记名字，不记启用状态', () => {
 })
 ```
 
-- [ ] **Step 2: 运行测试，确认失败**
+ - [x] **Step 2: 运行测试，确认失败**
 
 运行：`node --test test/bundles.test.js`
 预期：FAIL，`Cannot find module '../src/bundles.js'`
 
-- [ ] **Step 3: 实现插件名单模块**
+ - [x] **Step 3: 实现插件名单模块**
 
 创建 `src/bundles.js`：
 
@@ -779,12 +779,12 @@ export async function collectBundles(pluginManager) {
 }
 ```
 
-- [ ] **Step 4: 运行测试，确认通过**
+ - [x] **Step 4: 运行测试，确认通过**
 
 运行：`node --test test/bundles.test.js`
 预期：PASS，6 个测试通过
 
-- [ ] **Step 5: 提交**
+ - [x] **Step 5: 提交**
 
 ```bash
 git add src/bundles.js test/bundles.test.js
@@ -801,7 +801,7 @@ git commit -m "插件名单：官方判定口径落地为 official || availabili
 - Create: `src/skills.js`
 - Test: `test/skills.test.js`
 
-- [ ] **Step 1: 写失败测试**
+ - [x] **Step 1: 写失败测试**
 
 创建 `test/skills.test.js`：
 
@@ -870,12 +870,12 @@ test('技能含二进制资源时不破坏内容', () => {
 })
 ```
 
-- [ ] **Step 2: 运行测试，确认失败**
+ - [x] **Step 2: 运行测试，确认失败**
 
 运行：`node --test test/skills.test.js`
 预期：FAIL，`Cannot find module '../src/skills.js'`
 
-- [ ] **Step 3: 实现技能模块**
+ - [x] **Step 3: 实现技能模块**
 
 创建 `src/skills.js`：
 
@@ -1012,12 +1012,12 @@ export async function crossCheckSkills(skillService, directNames) {
 }
 ```
 
-- [ ] **Step 4: 运行测试，确认通过**
+ - [x] **Step 4: 运行测试，确认通过**
 
 运行：`node --test test/skills.test.js`
 预期：PASS，4 个测试通过
 
-- [ ] **Step 5: 提交**
+ - [x] **Step 5: 提交**
 
 ```bash
 git add src/skills.js test/skills.test.js
@@ -1034,7 +1034,7 @@ git commit -m "技能：直读为主通道，保留可执行位，ctx.skills 作
 - Create: `src/extract.js`
 - Test: `test/extract.test.js`
 
-- [ ] **Step 1: 写失败测试**
+ - [x] **Step 1: 写失败测试**
 
 创建 `test/extract.test.js`：
 
@@ -1124,12 +1124,12 @@ test('insert 行不作为配置项抽取（否则会写坏别的机器的加载�
 })
 ```
 
-- [ ] **Step 2: 运行测试，确认失败**
+ - [x] **Step 2: 运行测试，确认失败**
 
 运行：`node --test test/extract.test.js`
 预期：FAIL，`Cannot find module '../src/extract.js'`
 
-- [ ] **Step 3: 实现抽取器**
+ - [x] **Step 3: 实现抽取器**
 
 创建 `src/extract.js`：
 
@@ -1206,16 +1206,762 @@ export function isExtractionClean(result) {
 }
 ```
 
-- [ ] **Step 4: 运行测试，确认通过**
+ - [x] **Step 4: 运行测试，确认通过**
 
 运行：`node --test test/extract.test.js`
 预期：PASS，6 个测试通过
 
-- [ ] **Step 5: 提交**
+ - [x] **Step 5: 提交**
 
 ```bash
 git add src/extract.js test/extract.test.js
 git commit -m "抽取器：按顶层条目抽取公共线，识别并排除 insert 痕迹"
+```
+
+---
+
+## 三 · 数据模型
+
+### Task 7: 快照组装与解析
+
+**Files:**
+- Create: `src/snapshot.js`
+- Test: `test/snapshot.test.js`
+
+ - [x] **Step 1: 写失败测试**
+
+创建 `test/snapshot.test.js`：
+
+```js
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { SCHEMA_VERSION, buildSnapshot, serializeSnapshot, parseSnapshot } from '../src/snapshot.js'
+
+test('快照模型含 schema 版本、生成时间、来源机器与逐项摘要', () => {
+  const snap = buildSnapshot({
+    generatedBy: 'test-machine',
+    generatedAt: '2026-10-15T00:00:00.000Z',
+    files: [
+      { path: 'config/profile.patch.yml', kind: 'shared', content: 'x' },
+      { path: 'notes.md', kind: 'shared', content: 'y' },
+    ],
+  })
+  assert.equal(snap.schemaVersion, SCHEMA_VERSION)
+  assert.equal(snap.generatedBy, 'test-machine')
+  assert.equal(snap.generatedAt, '2026-10-15T00:00:00.000Z')
+  assert.equal(snap.entries.length, 2)
+  assert.equal(snap.entries[0].path, 'config/profile.patch.yml')
+  assert.equal(typeof snap.entries[0].hash, 'string')
+  assert.ok(snap.entries[0].hash.length > 0, '每项应有内容摘要')
+})
+
+test('相同内容摘要相同，内容变化摘要变化', () => {
+  const a = buildSnapshot({ generatedBy: 'm', generatedAt: 'T', files: [{ path: 'p', kind: 'shared', content: 'abc' }] })
+  const b = buildSnapshot({ generatedBy: 'm', generatedAt: 'T', files: [{ path: 'p', kind: 'shared', content: 'abc' }] })
+  const c = buildSnapshot({ generatedBy: 'm', generatedAt: 'T', files: [{ path: 'p', kind: 'shared', content: 'abd' }] })
+  assert.equal(a.entries[0].hash, b.entries[0].hash)
+  assert.notEqual(a.entries[0].hash, c.entries[0].hash)
+})
+
+test('序列化与解析往返保真', () => {
+  const snap = buildSnapshot({
+    generatedBy: 'm', generatedAt: 'T',
+    files: [{ path: 'p', kind: 'shared', content: 'abc' }],
+  })
+  const text = serializeSnapshot(snap)
+  const back = parseSnapshot(text)
+  assert.deepEqual(back, snap)
+})
+
+test('解析非法快照时抛出可读错误', () => {
+  assert.throws(() => parseSnapshot('{"schemaVersion":999,"entries":[]}'), /schema 版本/)
+  assert.throws(() => parseSnapshot('not json'), /不是合法 JSON/)
+})
+```
+
+ - [x] **Step 2: 运行测试，确认失败**
+
+运行：`node --test test/snapshot.test.js`
+预期：FAIL，`Cannot find module '../src/snapshot.js'`
+
+ - [x] **Step 3: 实现快照模块**
+
+创建 `src/snapshot.js`：
+
+```js
+/**
+ * 快照模型：推送到云端的那一份内容的清单。
+ * 数据模型见设计 §5.2。entries 逐文件记摘要，用于快速比对而不必读全部内容。
+ */
+
+import { createHash } from 'node:crypto'
+
+/** 快照格式版本。云端是跨机器共享的，读不懂的版本必须明确拒绝而不是猜。 */
+export const SCHEMA_VERSION = 1
+
+function hashOf(content) {
+  return createHash('sha256').update(content).digest('hex').slice(0, 16)
+}
+
+/**
+ * 组装快照清单。
+ * @param {{generatedBy: string, generatedAt: string, files: {path: string, kind: string, content: string|Buffer}[]}} input
+ * @returns {object}
+ */
+export function buildSnapshot(input) {
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    generatedAt: input.generatedAt,
+    generatedBy: input.generatedBy,
+    entries: input.files.map(f => ({
+      path: f.path,
+      kind: f.kind,
+      hash: hashOf(f.content),
+    })),
+  }
+}
+
+export function serializeSnapshot(snapshot) {
+  return JSON.stringify(snapshot, null, 2) + '\n'
+}
+
+/**
+ * 解析云端取回的快照清单。
+ * 版本不符时明确拒绝——不能拿不懂的格式去写用户的配置。
+ * @param {string} text
+ * @returns {object}
+ */
+export function parseSnapshot(text) {
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch (error) {
+    throw new Error(`快照清单不是合法 JSON：${String(error.message)}`)
+  }
+  if (parsed?.schemaVersion !== SCHEMA_VERSION) {
+    throw new Error(`快照清单 schema 版本不受支持：期望 ${SCHEMA_VERSION}，实际 ${parsed?.schemaVersion}`)
+  }
+  if (!Array.isArray(parsed.entries)) {
+    throw new Error('快照清单缺少 entries 数组')
+  }
+  return parsed
+}
+```
+
+ - [x] **Step 4: 运行测试，确认通过**
+
+运行：`node --test test/snapshot.test.js`
+预期：PASS，4 个测试通过
+
+ - [x] **Step 5: 提交**
+
+```bash
+git add src/snapshot.js test/snapshot.test.js
+git commit -m "快照：清单模型与内容摘要，拒绝读不懂的 schema 版本"
+```
+
+---
+
+### Task 8: 差异计算
+
+**Files:**
+- Create: `src/diff.js`
+- Test: `test/diff.test.js`
+
+ - [x] **Step 1: 写失败测试**
+
+创建 `test/diff.test.js`：
+
+```js
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { diffSnapshots, summarizeDiff } from '../src/diff.js'
+
+const snapshotOf = (pairs) => ({
+  schemaVersion: 1, generatedAt: 'T', generatedBy: 'm',
+  entries: pairs.map(([path, hash]) => ({ path, kind: 'shared', hash })),
+})
+
+test('识别新增项', () => {
+  const local = snapshotOf([['a', 'h1']])
+  const remote = snapshotOf([['a', 'h1'], ['b', 'h2']])
+  const items = diffSnapshots(local, remote)
+  const b = items.find(i => i.path === 'b')
+  assert.equal(b.action, 'add')
+})
+
+test('识别修改项', () => {
+  const local = snapshotOf([['a', 'h1']])
+  const remote = snapshotOf([['a', 'h2']])
+  const items = diffSnapshots(local, remote)
+  assert.equal(items.length, 1)
+  assert.equal(items[0].action, 'modify')
+})
+
+test('识别删除项', () => {
+  const local = snapshotOf([['a', 'h1'], ['b', 'h2']])
+  const remote = snapshotOf([['a', 'h1']])
+  const items = diffSnapshots(local, remote)
+  const b = items.find(i => i.path === 'b')
+  assert.equal(b.action, 'delete')
+})
+
+test('相同项不进差异列表', () => {
+  const local = snapshotOf([['a', 'h1']])
+  const remote = snapshotOf([['a', 'h1']])
+  assert.deepEqual(diffSnapshots(local, remote), [])
+})
+
+test('每项带归属与人类可读的一句话说明', () => {
+  const local = snapshotOf([['a', 'h1']])
+  const remote = snapshotOf([['a', 'h2'], ['b', 'h3']])
+  const items = diffSnapshots(local, remote)
+  for (const item of items) {
+    assert.ok(item.ownership, '应有归属字段')
+    assert.ok(typeof item.summary === 'string' && item.summary.length > 0, '应有一句话说明')
+  }
+})
+
+test('汇总差异条数，供界面与报告使用', () => {
+  const local = snapshotOf([['a', 'h1'], ['b', 'h2']])
+  const remote = snapshotOf([['a', 'h2'], ['c', 'h3']])
+  const stats = summarizeDiff(diffSnapshots(local, remote))
+  assert.equal(stats.add, 1)
+  assert.equal(stats.modify, 1)
+  assert.equal(stats.delete, 1)
+  assert.equal(stats.total, 3)
+})
+```
+
+ - [x] **Step 2: 运行测试，确认失败**
+
+运行：`node --test test/diff.test.js`
+预期：FAIL，`Cannot find module '../src/diff.js'`
+
+ - [x] **Step 3: 实现差异计算**
+
+创建 `src/diff.js`：
+
+```js
+/**
+ * 差异计算：本机现状 与 云端快照 逐项比对，生成 DiffItem 列表。
+ * 数据模型见设计 §5.2。推送与拉取共用这一份逻辑，只是参数方向不同。
+ */
+
+/**
+ * 计算差异。
+ * @param {{entries: object[]}} local - 本机现状清单
+ * @param {{entries: object[]}} remote - 云端快照清单
+ * @returns {{path: string, action: string, ownership: string, summary: string}[]}
+ */
+export function diffSnapshots(local, remote) {
+  const localMap = new Map((local?.entries ?? []).map(e => [e.path, e]))
+  const remoteMap = new Map((remote?.entries ?? []).map(e => [e.path, e]))
+  const items = []
+
+  for (const [path, remoteEntry] of remoteMap) {
+    const localEntry = localMap.get(path)
+    if (localEntry === undefined) {
+      items.push({
+        path,
+        action: 'add',
+        ownership: remoteEntry.kind ?? 'shared',
+        summary: `${path}：本机没有，将从云端新增`,
+      })
+      continue
+    }
+    if (localEntry.hash !== remoteEntry.hash) {
+      items.push({
+        path,
+        action: 'modify',
+        ownership: remoteEntry.kind ?? 'shared',
+        summary: `${path}：本机与云端内容不同`,
+      })
+    }
+  }
+
+  for (const [path, localEntry] of localMap) {
+    if (remoteMap.has(path)) continue
+    items.push({
+      path,
+      action: 'delete',
+      ownership: localEntry.kind ?? 'shared',
+      summary: `${path}：云端没有，本机存在（本次不会删除，仅供确认）`,
+    })
+  }
+
+  return items.sort((a, b) => a.path.localeCompare(b.path))
+}
+
+/**
+ * 汇总差异条数。
+ * @param {object[]} items
+ * @returns {{add: number, modify: number, delete: number, total: number}}
+ */
+export function summarizeDiff(items) {
+  const stats = { add: 0, modify: 0, delete: 0, total: items.length }
+  for (const item of items) {
+    if (item.action === 'add') stats.add += 1
+    else if (item.action === 'modify') stats.modify += 1
+    else if (item.action === 'delete') stats.delete += 1
+  }
+  return stats
+}
+```
+
+ - [x] **Step 4: 运行测试，确认通过**
+
+运行：`node --test test/diff.test.js`
+预期：PASS，6 个测试通过
+
+ - [x] **Step 5: 提交**
+
+```bash
+git add src/diff.js test/diff.test.js
+git commit -m "差异：快照逐项比对，推送与拉取共用一份逻辑"
+```
+
+---
+
+## 四 · 写路径
+
+### Task 9: 备份与回退
+
+设计决策 17：应用前先备份，支持回退。这是「可回退」这条需求的实现方式。
+
+**Files:**
+- Create: `src/backup.js`
+- Test: `test/backup.test.js`
+
+ - [x] **Step 1: 写失败测试**
+
+创建 `test/backup.test.js`：
+
+```js
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, existsSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createBackup, restoreFromBackup } from '../src/backup.js'
+
+function sandbox() {
+  const root = mkdtempSync(join(tmpdir(), 'roam-bk-'))
+  mkdirSync(join(root, 'profiles', 'web'), { recursive: true })
+  writeFileSync(join(root, 'profiles', 'web', 'cordis.patch.yml'), 'original\n')
+  return root
+}
+
+test('备份把指定文件复制到带时间戳的目录', () => {
+  const root = sandbox()
+  const dest = mkdtempSync(join(tmpdir(), 'roam-bkdest-'))
+  const info = createBackup({
+    files: [join(root, 'profiles', 'web', 'cordis.patch.yml')],
+    destRoot: dest,
+    stamp: '20261015-120000',
+  })
+  assert.ok(info.backupPath.includes('20261015-120000'), '备份路径应带时间戳')
+  assert.ok(existsSync(join(info.backupPath, 'profiles', 'web', 'cordis.patch.yml')))
+  rmSync(root, { recursive: true }); rmSync(dest, { recursive: true })
+})
+
+test('备份不修改原文件', () => {
+  const root = sandbox()
+  const dest = mkdtempSync(join(tmpdir(), 'roam-bkdest-'))
+  createBackup({ files: [join(root, 'profiles', 'web', 'cordis.patch.yml')], destRoot: dest, stamp: 'S' })
+  assert.equal(readFileSync(join(root, 'profiles', 'web', 'cordis.patch.yml'), 'utf8'), 'original\n')
+  rmSync(root, { recursive: true }); rmSync(dest, { recursive: true })
+})
+
+test('回退把文件恢复为备份时的内容', () => {
+  const root = sandbox()
+  const dest = mkdtempSync(join(tmpdir(), 'roam-bkdest-'))
+  const target = join(root, 'profiles', 'web', 'cordis.patch.yml')
+  const info = createBackup({ files: [target], destRoot: dest, stamp: 'S' })
+  writeFileSync(target, 'broken\n')
+  restoreFromBackup(info, [target])
+  assert.equal(readFileSync(target, 'utf8'), 'original\n')
+  rmSync(root, { recursive: true }); rmSync(dest, { recursive: true })
+})
+
+test('备份不存在的文件时记录失败而不中断', () => {
+  const dest = mkdtempSync(join(tmpdir(), 'roam-bkdest-'))
+  const info = createBackup({ files: ['/nonexistent/path/x.yml'], destRoot: dest, stamp: 'S' })
+  assert.deepEqual(info.backedUp, [])
+  assert.equal(info.failed.length, 1)
+  rmSync(dest, { recursive: true })
+})
+```
+
+ - [x] **Step 2: 运行测试，确认失败**
+
+运行：`node --test test/backup.test.js`
+预期：FAIL，`Cannot find module '../src/backup.js'`
+
+ - [x] **Step 3: 实现备份模块**
+
+创建 `src/backup.js`：
+
+```js
+/**
+ * 备份与回退。
+ * 设计决策 17：应用前先备份，支持回退。这是「可回退」需求的落地。
+ *
+ * 备份目录按时间戳分开，而不是覆盖同一个目录——用户可能需要回到更早的一次状态。
+ */
+
+import { mkdirSync, copyFileSync, existsSync, statSync } from 'node:fs'
+import { join, dirname, isAbsolute, relative } from 'node:path'
+
+/**
+ * 生成时间戳字符串，形如 20261015-120000。
+ * @param {Date} [now]
+ * @returns {string}
+ */
+export function timestamp(now = new Date()) {
+  const p = (n, w = 2) => String(n).padStart(w, '0')
+  return `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`
+}
+
+/**
+ * 把一组文件备份到带时间戳的目录下。
+ *
+ * 路径在备份目录内按【绝对路径去掉根】保留层级，这样回退时能还原到原位，
+ * 且不会因不同盘符或前缀而互相覆盖。
+ *
+ * @param {{files: string[], destRoot: string, stamp?: string}} input
+ * @returns {{backupPath: string, backedUp: string[], failed: {path: string, error: string}[]}}
+ */
+export function createBackup(input) {
+  const stamp = input.stamp ?? timestamp()
+  const backupPath = join(input.destRoot, stamp)
+  mkdirSync(backupPath, { recursive: true })
+  const backedUp = []
+  const failed = []
+  for (const file of input.files) {
+    try {
+      if (!existsSync(file) || !statSync(file).isFile()) {
+        failed.push({ path: file, error: '文件不存在' })
+        continue
+      }
+      const rel = isAbsolute(file) ? relative('/', file) : file
+      const dest = join(backupPath, rel)
+      mkdirSync(dirname(dest), { recursive: true })
+      copyFileSync(file, dest)
+      backedUp.push(file)
+    } catch (error) {
+      failed.push({ path: file, error: String(error?.message ?? error) })
+    }
+  }
+  return { backupPath, backedUp, failed }
+}
+
+/**
+ * 从备份回退指定文件。
+ * @param {{backupPath: string}} info - createBackup 的返回
+ * @param {string[]} files - 要回退的文件（绝对路径，与备份时一致）
+ * @returns {{restored: string[], failed: {path: string, error: string}[]}}
+ */
+export function restoreFromBackup(info, files) {
+  const restored = []
+  const failed = []
+  for (const file of files) {
+    try {
+      const rel = isAbsolute(file) ? relative('/', file) : file
+      const src = join(info.backupPath, rel)
+      if (!existsSync(src)) {
+        failed.push({ path: file, error: '备份中没有这个文件' })
+        continue
+      }
+      mkdirSync(dirname(file), { recursive: true })
+      copyFileSync(src, file)
+      restored.push(file)
+    } catch (error) {
+      failed.push({ path: file, error: String(error?.message ?? error) })
+    }
+  }
+  return { restored, failed }
+}
+```
+
+ - [x] **Step 4: 运行测试，确认通过**
+
+运行：`node --test test/backup.test.js`
+预期：PASS，4 个测试通过
+
+ - [x] **Step 5: 提交**
+
+```bash
+git add src/backup.js test/backup.test.js
+git commit -m "备份：应用前按时间戳备份，支持逐文件回退"
+```
+
+---
+
+### Task 10: 应用器（写路径核心）
+
+本任务落地设计决策 25 与实测约束 C2、C3。**关键点**：写路径不做自动降级（两条都试可能产生副作用），而是把「静默失败」转成「写后立刻可见的失败」。
+
+**Files:**
+- Create: `src/apply.js`
+- Test: `test/apply.test.js`
+
+ - [x] **Step 1: 写失败测试**
+
+创建 `test/apply.test.js`：
+
+```js
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { applyPatchFile, verifyWriteBack } from '../src/apply.js'
+import { parsePatchList } from '../src/yaml-loader.js'
+
+const REMOTE = [
+  '- id: llm-pi-ai',
+  '  name: "@deepseek-ai/dsh-llm-pi-ai"',
+  '  config:',
+  '    providers:',
+  '      demo:',
+  '        apiKeyEnv: DEMO_KEY',
+  '',
+].join('\n')
+
+const LOCAL = [
+  '- id: webserver',
+  '  config:',
+  "    host: '10.0.0.9'",
+  '- id: ui-theme',
+  '  config:',
+  '    preference: light',
+  '',
+].join('\n')
+
+function sandbox() {
+  const root = mkdtempSync(join(tmpdir(), 'roam-apply-'))
+  const file = join(root, 'cordis.patch.yml')
+  writeFileSync(file, LOCAL)
+  return { root, file }
+}
+
+test('应用公共条目后，本机条目零损伤', () => {
+  const { root, file } = sandbox()
+  const result = applyPatchFile({ targetFile: file, sharedRows: parsePatchList(REMOTE) })
+  assert.deepEqual(result.warnings, [], '不应有警告')
+  const after = parsePatchList(readFileSync(file, 'utf8'))
+  assert.ok(after.some(r => r.id === 'llm-pi-ai'), '公共条目应已写入')
+  assert.equal(after.find(r => r.id === 'webserver').config.host, '10.0.0.9', '本机值不得被改')
+  assert.equal(after.find(r => r.id === 'ui-theme').config.preference, 'light')
+  rmSync(root, { recursive: true })
+})
+
+test('写后回读校验：内容确实落盘才算成功', () => {
+  const { root, file } = sandbox()
+  applyPatchFile({ targetFile: file, sharedRows: parsePatchList(REMOTE) })
+  const check = verifyWriteBack(file, parsePatchList(REMOTE))
+  assert.equal(check.ok, true)
+  assert.deepEqual(check.missing, [])
+  rmSync(root, { recursive: true })
+})
+
+test('写后回读校验能发现缺失的条目', () => {
+  const { root, file } = sandbox()
+  const check = verifyWriteBack(file, parsePatchList(REMOTE))
+  assert.equal(check.ok, false)
+  assert.deepEqual(check.missing, ['llm-pi-ai'])
+  rmSync(root, { recursive: true })
+})
+
+test('应用前自动备份，回退可还原', () => {
+  const { root, file } = sandbox()
+  const result = applyPatchFile({
+    targetFile: file,
+    sharedRows: parsePatchList(REMOTE),
+    backupRoot: join(root, 'backup'),
+  })
+  assert.ok(result.backup, '应产生备份信息')
+  assert.equal(result.backup.backedUp.length, 1)
+  rmSync(root, { recursive: true })
+})
+
+test('目标文件不存在时也能建立（新机器场景）', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roam-new-'))
+  const file = join(root, 'cordis.patch.yml')
+  const result = applyPatchFile({ targetFile: file, sharedRows: parsePatchList(REMOTE) })
+  assert.deepEqual(result.warnings, [])
+  const after = parsePatchList(readFileSync(file, 'utf8'))
+  assert.deepEqual(after.map(r => r.id), ['llm-pi-ai'])
+  rmSync(root, { recursive: true })
+})
+
+test('C2：写入产生警告时如实上报，不静默吞掉', () => {
+  const { root, file } = sandbox()
+  const result = applyPatchFile({
+    targetFile: file,
+    sharedRows: parsePatchList(REMOTE),
+    __forceWarnForTest: true,
+  })
+  assert.ok(result.warnings.length > 0, '警告必须出现在返回值里')
+  assert.equal(result.ok, false, '有警告即视为未完全成功')
+  rmSync(root, { recursive: true })
+})
+```
+
+ - [x] **Step 2: 运行测试，确认失败**
+
+运行：`node --test test/apply.test.js`
+预期：FAIL，`Cannot find module '../src/apply.js'`
+
+ - [x] **Step 3: 实现应用器**
+
+创建 `src/apply.js`：
+
+```js
+/**
+ * 拉取侧应用：备份 → 写入 → 写后回读校验。
+ *
+ * 设计决策 25 的落地，并遵守两条实测约束：
+ *   C2：applyEntryPatches 的 warn 回调必须收集，回调非空即视为写入异常。
+ *       官方在目标行不存在时【不抛错】，只经 warn 报一句 not found。
+ *   C3：同名行匹配时 config 是全量替换而非深合并，合并必须在内存中先做好。
+ *
+ * 不做自动降级：读路径可以「A 失败换 B」，写路径不行——两条都试可能产生副作用，
+ * 跳过则意味着这台机器的配置停在半改状态。处置是「回退这一项 + 列为需人工处理」。
+ */
+
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { parsePatchList, renderPatches, mergeSharedInto } from './yaml-loader.js'
+import { createBackup } from './backup.js'
+
+/**
+ * 把云端的公共条目应用到本机 patch 文件。
+ *
+ * 路径：先备份 → 读取本机现状 → 在内存中合并 → 渲染 → 写出 → 调用方随后回读校验。
+ *
+ * @param {{
+ *   targetFile: string,
+ *   sharedRows: object[],
+ *   backupRoot?: string,
+ *   __forceWarnForTest?: boolean,
+ * }} input
+ * @returns {{
+ *   ok: boolean,
+ *   warnings: string[],
+ *   applied: string[],
+ *   backup: object|null,
+ *   wrote: boolean,
+ * }}
+ */
+export function applyPatchFile(input) {
+  const { targetFile, sharedRows, backupRoot } = input
+
+  // 1. 备份（文件不存在时不备份——新机器场景没有可备份的内容）
+  let backup = null
+  if (backupRoot !== undefined && existsSync(targetFile)) {
+    backup = createBackup({ files: [targetFile], destRoot: backupRoot })
+  }
+
+  // 2. 读取本机现状
+  let localRows = []
+  if (existsSync(targetFile)) {
+    const text = readFileSync(targetFile, 'utf8')
+    localRows = text.trim() === '' ? [] : parsePatchList(text)
+  }
+
+  // 3. 在内存中合并（C3：不指望 patch 做局部合并）
+  const merged = mergeSharedInto(
+    localRows,
+    sharedRows,
+    input.__forceWarnForTest === true ? { forceIdPatchForTest: 'no-such-id-for-warning' } : {},
+  )
+
+  // 4. 渲染并写出
+  mkdirSync(dirname(targetFile), { recursive: true })
+  writeFileSync(targetFile, renderPatches(merged.rows, 'settings-roam'), 'utf8')
+
+  const warnings = merged.warnings
+  return {
+    ok: warnings.length === 0,
+    warnings,
+    applied: merged.applied,
+    backup,
+    wrote: true,
+  }
+}
+
+/**
+ * 写后回读校验：确认文件里确实变成了预期值。
+ * 这是把「静默失败」转换成「可见失败」的那一步。
+ * @param {string} targetFile
+ * @param {object[]} expectedRows - 期望存在的公共条目
+ * @returns {{ok: boolean, missing: string[], mismatch: string[]}}
+ */
+export function verifyWriteBack(targetFile, expectedRows) {
+  if (!existsSync(targetFile)) {
+    return { ok: false, missing: expectedRows.map(r => r.id), mismatch: [] }
+  }
+  const actual = parsePatchList(readFileSync(targetFile, 'utf8'))
+  const actualMap = new Map(actual.map(r => [r.id, r]))
+  const missing = []
+  const mismatch = []
+  for (const expected of expectedRows) {
+    const got = actualMap.get(expected.id)
+    if (got === undefined) {
+      missing.push(expected.id)
+      continue
+    }
+    if (JSON.stringify(got.config) !== JSON.stringify(expected.config)) {
+      mismatch.push(expected.id)
+    }
+  }
+  return { ok: missing.length === 0 && mismatch.length === 0, missing, mismatch }
+}
+
+/**
+ * 回退一项已应用的配置。
+ * 写路径不「跳过」，而是「回退这一项 + 列为需人工处理」。
+ * @param {{backupPath: string}} backupInfo
+ * @param {string} targetFile
+ * @returns {{restored: string[], failed: object[]}}
+ */
+export function rollbackApplied(backupInfo, targetFile) {
+  const { restoreFromBackup } = await import('./backup.js')
+  return restoreFromBackup(backupInfo, [targetFile])
+}
+```
+
+**注意**：`rollbackApplied` 里使用了顶层 `await import`，需将其改为静态导入或把函数改为 `async`。正确写法是把该函数声明为 `async`：
+
+```js
+export async function rollbackApplied(backupInfo, targetFile) {
+  const { restoreFromBackup } = await import('./backup.js')
+  return restoreFromBackup(backupInfo, [targetFile])
+}
+```
+
+更简单的做法是直接在文件顶部与 `createBackup` 一起静态导入 `restoreFromBackup`：
+
+```js
+import { createBackup, restoreFromBackup } from './backup.js'
+
+export function rollbackApplied(backupInfo, targetFile) {
+  return restoreFromBackup(backupInfo, [targetFile])
+}
+```
+
+ - [x] **Step 4: 运行测试，确认通过**
+
+运行：`node --test test/apply.test.js`
+预期：PASS，6 个测试通过
+
+ - [x] **Step 5: 提交**
+
+```bash
+git add src/apply.js test/apply.test.js
+git commit -m "应用器：备份→合并→写入→写后回读校验，警告即失败"
 ```
 
 ---
