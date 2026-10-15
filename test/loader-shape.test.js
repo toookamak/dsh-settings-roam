@@ -7,6 +7,10 @@ import { dirname, join } from 'node:path'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = p => readFileSync(join(root, p), 'utf8')
 
+// ─── 文件级契约 ──────────────────────────────────────────────────────
+// 这些断言只看文本，不需要加载 bundle：它们锁的是「包长什么样」，
+// 真装载验收（scripts/verify-load.mjs）负责锁「装上去能不能用」。
+
 test('package.json 声明的每个文件都真实存在', () => {
   const pkg = JSON.parse(read('package.json'))
   for (const f of pkg.files) {
@@ -108,329 +112,76 @@ test('两套语言文件都齐，且 meta 字段一致', () => {
   )
 })
 
-test('手写 lazy-CJS bundle 能被模块加载器真实接受（E4 实测）', async () => {
-  // 这一步不能只看文件文本，必须真的按官方协议加载一次。
-  // 官方协议见 packages/client/modules：window.__ModuleLoader__.load({ id, factory }),
-  // factory(require) 返回导出，require 用裸说明符解析 loader 模块表。
-  const loaded = []
+// ─── 测试用运行环境 ──────────────────────────────────────────────────
+//
+// 这里不是 React，也不假装是。它只做到「让组件跑一遍并把树交出来」：
+// hooks 在单次渲染内按调用顺序存值，没有重渲染（组件只被调用一次）。
+// 需要「跨渲染才成立」的断言一律退回源码层，不在这层伪造。
+
+let hookState = []
+let hookIndex = 0
+
+const REACT = {
+  // flat(Infinity)：React 也会摊平嵌套数组（FIELDS.map(...) 作为一个子节点传进来）
+  createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) }),
+  useState: initial => {
+    // 每调用一次组件就换一份 hooks（render 里重置）；这里把当下那份捕获住，
+    // 否则子组件渲染时重置会把父组件的 setter 指向一份空数组。
+    const store = hookState
+    const slot = hookIndex++
+    if (!(slot in store)) {
+      store[slot] = typeof initial === 'function' ? initial() : initial
+    }
+    return [
+      store[slot],
+      next => { store[slot] = typeof next === 'function' ? next(store[slot]) : next },
+    ]
+  },
+  useEffect: () => {},
+  useCallback: fn => fn,
+  useMemo: fn => fn(),
+  useRef: value => ({ current: value }),
+}
+
+/**
+ * 宿主提供的界面组件（@deepseek-ai/dsh-client-ui-primitives）。
+ *
+ * 它们是「宿主渲染的」，所以 render() 不展开它们——保留结构用来断言
+ * 「我们用的是宿主组件，不是裸 HTML 元素」。
+ */
+const PRIMITIVES = {
+  Button: function Button(props) { return { type: 'Button', props, children: props?.children ?? [] } },
+  Input: function Input(props) { return { type: 'Input', props, children: [] } },
+  StateDot: function StateDot(props) { return { type: 'StateDot', props, children: [] } },
+  IconDownloadOutlineRegular: 'ICON_DOWNLOAD',
+  IconRefreshOutlineRegular: 'ICON_REFRESH',
+  IconRightUpOutlineRegular: 'ICON_UP',
+  IconFolderOpenOutlineRegular: 'ICON_FOLDER',
+  IconCopyOutlineRegular: 'ICON_COPY',
+}
+
+const HOST_COMPONENTS = new Set([PRIMITIVES.Button, PRIMITIVES.Input, PRIMITIVES.StateDot])
+
+/**
+ * 按官方协议加载一次客户端 bundle，返回导出对象。
+ * @param {string} tag 用于绕开 ESM 模块缓存
+ * @param {{withoutPrimitives?: boolean}} [options]
+ */
+async function loadClient(tag, options = {}) {
   let exported = null
+  const loadedIds = []
+  const warned = []
+  const realWarn = console.warn
+  console.warn = (...args) => { warned.push(args.join(' ')) }
   globalThis.window = {
     __ModuleLoader__: {
       load: ({ id, factory }) => {
-        loaded.push(id)
-        exported = factory((spec) => {
-          if (spec === 'react') {
-            return { createElement: (type, props, ...children) => ({ type, props, children }) }
-          }
-          throw new Error(`未预期的依赖：${spec}`)
-        })
-      },
-    },
-  }
-  try {
-    await import(`../client.js?e4=${Date.now()}`)
-  } finally {
-    delete globalThis.window
-  }
-
-  const pkg = JSON.parse(read('package.json'))
-  assert.deepEqual(loaded, [pkg.name], '登记的 id 必须恰好是裸包名一次')
-  assert.ok(exported && typeof exported === 'object', 'factory 必须返回导出对象')
-  assert.equal(typeof exported.Section, 'function', '要贡献设置分区，必须导出 Section')
-})
-
-test('状态行的四类状态各给一句极简文案（U3）', async () => {
-  let exported = null
-  globalThis.window = {
-    __ModuleLoader__: {
-      load: ({ factory }) => {
-        exported = factory(() => ({ createElement: (type, props, ...children) => ({ type, props, children }) }))
-      },
-    },
-  }
-  try {
-    await import(`../client.js?u3=${Date.now()}`)
-  } finally {
-    delete globalThis.window
-  }
-
-  const cases = ['empty-cloud', 'has-diff', 'needs-config', 'clean']
-  const texts = new Set()
-  for (const kind of cases) {
-    const el = exported.StatusLine({ state: { kind, count: 3 } })
-    const text = String(el.children[0] ?? '')
-    assert.ok(text.length > 0, `${kind} 必须有文案`)
-    // 极简：不铺垫、不解释设计意图，一句话说清
-    assert.ok(text.split('。').filter(Boolean).length <= 2, `${kind} 的文案不应超过一句话`)
-    texts.add(text)
-  }
-  assert.equal(texts.size, 4, '四类状态的文案必须彼此不同')
-})
-
-test('跳过项渲染的是说明文字，不是失败计数（§3.4）', async () => {
-  let exported = null
-  globalThis.window = {
-    __ModuleLoader__: {
-      load: ({ factory }) => {
-        exported = factory(() => ({
-          createElement: (type, props, ...children) => ({ type, props, children }),
-        }))
-      },
-    },
-  }
-  try {
-    await import(`../client.js?skip=${Date.now()}`)
-  } finally {
-    delete globalThis.window
-  }
-
-  const item = { name: 'demo-plugin', explanation: '把它发布到 registry 之后才能同步过来。' }
-  const row = exported.Section({ state: { kind: 'has-diff', count: 1, skipped: [item] } })
-  // Section 的第一个子元素是状态行，第二个是跳过区
-  const flat = JSON.stringify(row)
-  assert.ok(flat.includes('demo-plugin'), '要显示是哪个插件')
-  assert.ok(flat.includes('发布到 registry'), '必须给出可行动的说明')
-  assert.ok(!/失败\s*\d+|skip count/i.test(flat), '不得退化成失败计数')
-})
-
-test('概述区给出统计、来源与落盘位置，但不铺开逐项清单', async () => {
-  let exported = null
-  globalThis.window = {
-    __ModuleLoader__: {
-      load: ({ factory }) => {
-        exported = factory(() => ({
-          createElement: (type, props, ...children) => ({ type, props, children }),
-        }))
-      },
-    },
-  }
-  try {
-    await import(`../client.js?ov=${Date.now()}`)
-  } finally {
-    delete globalThis.window
-  }
-
-  const state = {
-    kind: 'clean',
-    overview: {
-      title: '上次推送',
-      stats: [
-        { label: '公共配置', value: 1 },
-        { label: '技能', value: 3 },
-        { label: '插件', value: 12 },
-      ],
-      meta: ['2026-10-15 12:00', '来自 machine-a'],
-      location: '/home/u/.dsh/settings-roam/export/2026-10-15-120000',
-    },
-  }
-
-  const el = exported.Overview({ state })
-  const flat = JSON.stringify(el)
-
-  assert.ok(flat.includes('上次推送'), '要有标题')
-  assert.ok(flat.includes('公共配置'), '要有统计项')
-  assert.ok(flat.includes('machine-a'), '要能看出这份来自哪台机器')
-  assert.ok(
-    flat.includes('export/2026-10-15-120000'),
-    '要给出真实落盘路径 —— 用户据此去打开核对',
-  )
-})
-
-test('没有概述数据时不渲染空区块', async () => {
-  let exported = null
-  globalThis.window = {
-    __ModuleLoader__: {
-      load: ({ factory }) => {
-        exported = factory(() => ({
-          createElement: (type, props, ...children) => ({ type, props, children }),
-        }))
-      },
-    },
-  }
-  try {
-    await import(`../client.js?ov2=${Date.now()}`)
-  } finally {
-    delete globalThis.window
-  }
-
-  assert.equal(exported.Overview({ state: {} }), null)
-  assert.equal(exported.Overview({ state: undefined }), null)
-})
-
-test('概述区提供「打开」动作时带出路径', async () => {
-  let exported = null
-  globalThis.window = {
-    __ModuleLoader__: {
-      load: ({ factory }) => {
-        exported = factory(() => ({
-          createElement: (type, props, ...children) => ({ type, props, children }),
-        }))
-      },
-    },
-  }
-  try {
-    await import(`../client.js?ov3=${Date.now()}`)
-  } finally {
-    delete globalThis.window
-  }
-
-  const opened = []
-  const state = {
-    overview: { title: 't', stats: [], location: '/x/y' },
-  }
-  const el = exported.Overview({ state, actions: { onOpenExport: p => opened.push(p) } })
-
-  // 按钮在 location 区块内部，不是 Overview 的直接子元素
-  const loc = el.children.find(c => c?.props?.className === 'roam-overview-location')
-  assert.ok(loc, '应有落盘位置区块')
-  const button = loc.children.find(c => c?.props?.className === 'roam-open')
-  assert.ok(button, '给了 onOpenExport 就该渲染打开按钮')
-  button.props.onClick()
-  assert.deepEqual(opened, ['/x/y'])
-})
-
-test('没有 onOpenExport 时不渲染打开按钮 —— 不给出点了没反应的控件', async () => {
-  let exported = null
-  globalThis.window = {
-    __ModuleLoader__: {
-      load: ({ factory }) => {
-        exported = factory(() => ({
-          createElement: (type, props, ...children) => ({ type, props, children }),
-        }))
-      },
-    },
-  }
-  try {
-    await import(`../client.js?ov4=${Date.now()}`)
-  } finally {
-    delete globalThis.window
-  }
-
-  const el = exported.Overview({ state: { overview: { title: 't', stats: [], location: '/x/y' } } })
-  const flat = JSON.stringify(el)
-  assert.ok(flat.includes('/x/y'), '路径仍要显示出来，让用户能自己找过去')
-  assert.ok(!flat.includes('"roam-open"'), '但不应有无效按钮')
-})
-
-// ─── 概述显示（用户要求「页面上要有概述」）────────────────────────────
-// 取向：只给概述，不铺开逐项清单。要看细节去打开导出的文件。
-
-test('概述渲染计数与「去哪看详情」的路径', async () => {
-  let exported = null
-  globalThis.window = {
-    __ModuleLoader__: {
-      load: ({ factory }) => {
-        exported = factory(() => ({
-          createElement: (type, props, ...children) => ({ type, props, children }),
-        }))
-      },
-    },
-  }
-  try {
-    await import(`../client.js?ov=${Date.now()}`)
-  } finally {
-    delete globalThis.window
-  }
-
-  const state = {
-    overview: {
-      title: '本次将同步',
-      stats: [
-        { label: '公共配置', value: 1 },
-        { label: '技能', value: 2 },
-        { label: '插件', value: 3 },
-      ],
-      meta: ['2026-10-15 09:07', '来自 machine-a'],
-      location: '/x/export/1',
-    },
-  }
-  const flat = JSON.stringify(exported.Overview({ state }))
-
-  assert.ok(flat.includes('本次将同步'), '要有标题')
-  assert.ok(flat.includes('公共配置') && flat.includes('技能') && flat.includes('插件'), '三类计数都要有')
-  assert.ok(flat.includes('2026-10-15 09:07'), '要有时间')
-  assert.ok(flat.includes('machine-a'), '要标明来源机器')
-  assert.ok(flat.includes('/x/export/1'), '要给出详情所在路径')
-})
-
-test('概述只给概述 —— 不把逐项文件清单铺进界面', async () => {
-  let exported = null
-  globalThis.window = {
-    __ModuleLoader__: {
-      load: ({ factory }) => {
-        exported = factory(() => ({
-          createElement: (type, props, ...children) => ({ type, props, children }),
-        }))
-      },
-    },
-  }
-  try {
-    await import(`../client.js?ov2=${Date.now()}`)
-  } finally {
-    delete globalThis.window
-  }
-
-  const state = {
-    overview: {
-      title: '本次将同步',
-      stats: [{ label: '技能', value: 2 }],
-      meta: [],
-      location: '/x/export/1',
-      // 即便宿主多传了文件清单，界面也不应逐项铺开
-      files: [
-        { path: 'skills/one/SKILL.md' },
-        { path: 'skills/two/SKILL.md' },
-        { path: 'skills/three/SKILL.md' },
-      ],
-    },
-  }
-  const flat = JSON.stringify(exported.Overview({ state }))
-
-  assert.ok(!flat.includes('skills/one'), '不逐项列出文件路径')
-  assert.ok(!flat.includes('skills/three'), '不逐项列出文件路径')
-})
-
-test('没有概述数据时不渲染区块 —— 不给空壳', async () => {
-  let exported = null
-  globalThis.window = {
-    __ModuleLoader__: {
-      load: ({ factory }) => {
-        exported = factory(() => ({
-          createElement: (type, props, ...children) => ({ type, props, children }),
-        }))
-      },
-    },
-  }
-  try {
-    await import(`../client.js?ov3=${Date.now()}`)
-  } finally {
-    delete globalThis.window
-  }
-
-  assert.equal(exported.Overview({ state: {} }), null)
-  assert.equal(exported.Overview({ state: { overview: null } }), null)
-})
-
-// ─── 挂载契约（本轮实测发现的真问题）─────────────────────────────────
-// 原先 client.js 只导出一堆组件，没有 apply 与 inject：
-// 模块加载器会接受它，但没有任何东西会去挂载，设置页上是一片空白且不报错。
-// 官方 packages/session-query/session-log-export/lib/client.js 末尾同样是
-// `exports.apply = apply; exports.inject = inject`。
-
-/** 按官方协议加载一次客户端 bundle，返回导出对象。 */
-async function loadClient(tag) {
-  let exported = null
-  globalThis.window = {
-    __ModuleLoader__: {
-      load: ({ factory }) => {
-        exported = factory((spec) => {
-          if (spec === 'react') {
-            return {
-              createElement: (type, props, ...children) => ({ type, props, children }),
-              useState: v => [v, () => {}],
-              useCallback: f => f,
-              useEffect: () => {},
-            }
+        loadedIds.push(id)
+        exported = factory(spec => {
+          if (spec === 'react') return REACT
+          if (spec === '@deepseek-ai/dsh-client-ui-primitives') {
+            if (options.withoutPrimitives) throw new Error('未提供界面组件')
+            return PRIMITIVES
           }
           throw new Error(`未预期的依赖：${spec}`)
         })
@@ -441,9 +192,125 @@ async function loadClient(tag) {
     await import(`../client.js?${tag}=${Date.now()}`)
   } finally {
     delete globalThis.window
+    console.warn = realWarn
   }
+  exported.loadedIds = loadedIds
+  exported.warned = warned
   return exported
 }
+
+/**
+ * 把元素树展开到「宿主元素」一层。
+ *
+ * 测试用的 createElement 不认识函数型 type，所以 h(ConfigCard, …) 产出的树里
+ * 仍嵌着 {type: ConfigCard, props} 这样的组件元素。这里手动调一次拿到输出；
+ * 宿主提供的组件不调用，原样保留。
+ */
+function render(el) {
+  if (el === null || el === undefined || typeof el !== 'object') return el
+  if (typeof el.type === 'function') {
+    if (HOST_COMPONENTS.has(el.type)) return { ...el }
+    hookState = []
+    hookIndex = 0
+    return render(el.type(el.props ?? {}))
+  }
+  return {
+    ...el,
+    children: (el.children ?? []).map(render).filter(c => c !== null && c !== undefined),
+  }
+}
+
+const isButton = el => el?.type === PRIMITIVES.Button
+const isInput = el => el?.type === PRIMITIVES.Input
+const byClass = (el, className) => (el?.children ?? []).find(c => c?.props?.className === className)
+const flat = el => JSON.stringify(el)
+
+/** 造一个 configForms 认得出来的命名空间视图（schema 是 $ref 风格）。 */
+function namespaceView(ns, keys = ['repoUrl', 'profileName', 'exportRoot', 'importRoot']) {
+  return { ns, schema: { uid: 21, refs: { 21: { dict: Object.fromEntries(keys.map((k, i) => [k, i])) } } } }
+}
+
+/**
+ * 造一个配置表单假体。
+ * @param {object} [overrides]
+ */
+function fakeForm(overrides = {}) {
+  const calls = { set: [], unset: [] }
+  const form = {
+    calls,
+    snapshot: { status: 'ready', writable: true, value: {}, ...overrides.snapshot },
+    getSnapshot() { return this.snapshot },
+    subscribe: () => () => {},
+    set: async (key, value) => {
+      calls.set.push([key, value])
+      if (overrides.reject) throw overrides.reject
+      return overrides.accept ?? true
+    },
+    unset: async (key) => {
+      calls.unset.push(key)
+      if (overrides.reject) throw overrides.reject
+      return overrides.accept ?? true
+    },
+  }
+  return form
+}
+
+/**
+ * 造一个客户端上下文。
+ *
+ * 与宿主半侧 test/apply-host.test.js 同一个理由：真客户端上下文也是
+ * 「没 inject 过就不给读」，这里只提供被声明过的那几个服务，
+ * 顺手把 effect 收下来，好断言「语言包是在 effect 里登记的」。
+ * @param {object} [overrides]
+ */
+function clientCtx(overrides = {}) {
+  const registered = []
+  const effects = []
+  const dictionaries = []
+  const injected = []
+  const ctx = {
+    registered,
+    effects,
+    dictionaries,
+    injected,
+    slots: {
+      inject: (name, fn) => { ctx.injectedSlot = name; fn() },
+      register: (spec, component) => {
+        registered.push({ spec, component })
+        return () => {}
+      },
+    },
+    // locale 是声明过的依赖，按 Cordis 的语义它一定存在
+    locale: {
+      bind: () => (key) => (key === 'nav' ? '设置漫游（译）' : key),
+      register: (ns, dicts) => { dictionaries.push({ ns, dicts }); return () => {} },
+    },
+    effect: (fn, label) => { effects.push({ fn, label }); return () => {} },
+    // configForms 不是声明过的依赖，只能经 ctx.inject 拿
+    inject: (deps, fn) => {
+      injected.push(deps)
+      fn(Object.fromEntries(deps.map(d => [d, overrides.captured?.[d]])))
+    },
+    ...overrides,
+  }
+  return ctx
+}
+
+// ─── 挂载契约 ────────────────────────────────────────────────────────
+// 原先 client.js 只导出一堆组件，没有 apply 与 inject：
+// 模块加载器会接受它，但没有任何东西会去挂载，设置页上是一片空白且不报错。
+
+test('手写 lazy-CJS bundle 能被模块加载器真实接受（E4 实测）', async () => {
+  // 这一步不能只看文件文本，必须真的按官方协议加载一次。
+  // 官方协议见 packages/client/modules：window.__ModuleLoader__.load({ id, factory }),
+  // factory(require) 返回导出，require 用裸说明符解析 loader 模块表。
+  const exported = await loadClient('e4')
+  const pkg = JSON.parse(read('package.json'))
+
+  assert.deepEqual(exported.loadedIds, [pkg.name], '登记的 id 必须恰好是裸包名一次')
+  assert.ok(exported && typeof exported === 'object', 'factory 必须返回导出对象')
+  assert.equal(typeof exported.Section, 'function', '要贡献设置分区，必须导出 Section')
+})
 
 test('客户端导出 apply 与 inject —— 否则界面一片空白且不报错', async () => {
   const exported = await loadClient('mount')
@@ -468,50 +335,23 @@ test('inject 是字符串数组，不是函数 —— 这是实测纠正过来�
 test('声明了的客户端服务必须真的被用到 —— inject 不能有名无实', async () => {
   const src = read('client.js')
   for (const service of ['slots', 'locale']) {
-    assert.ok(
-      src.includes(`ctx.${service}`),
-      `inject 声明了 ${service}，但源码里没有用到它`,
-    )
+    assert.ok(src.includes(`ctx.${service}`), `inject 声明了 ${service}，但源码里没有用到它`)
   }
 })
 
-/**
- * 造一个客户端上下文。
- *
- * 与宿主半侧 test/apply-host.test.js 同一个理由：真客户端上下文也是
- * 「没 inject 过就不给读」，这里只提供被声明过的那几个服务，
- * 顺手把 effect 收下来，好断言「语言包是在 effect 里登记的」。
- * @param {object} [overrides]
- */
-function clientCtx(overrides = {}) {
-  const registered = []
-  const effects = []
-  const dictionaries = []
-  const ctx = {
-    registered,
-    effects,
-    dictionaries,
-    slots: {
-      inject: (name, fn) => { ctx.injectedSlot = name; fn() },
-      register: (spec, component) => {
-        registered.push({ spec, component })
-        return () => {}
-      },
-    },
-    // locale 是声明过的依赖，按 Cordis 的语义它一定存在
-    locale: {
-      bind: () => (key) => (key === 'nav' ? '设置漫游（译）' : key),
-      register: (ns, dicts) => { dictionaries.push({ ns, dicts }); return () => {} },
-    },
-    effect: (fn, label) => { effects.push({ fn, label }); return () => {} },
-    ...overrides,
-  }
-  return ctx
-}
+test('configForms 走 ctx.inject 而不是写进 inject 数组 —— 它在宿主半侧还没声明', async () => {
+  const exported = await loadClient('form-inject')
+  const ctx = clientCtx()
+  exported.apply(ctx)
+  assert.ok(
+    ctx.injected.includes('configForms') || ctx.injected.some(d => d.includes('configForms')),
+    'configForms 必须经 ctx.inject 拿到',
+  )
+  assert.ok(!exported.inject.includes('configForms'), 'inject 数组里不该出现还没在宿主声明的服务')
+})
 
 test('apply 经 slots.inject 注册到 settings.section 槽位', async () => {
   const exported = await loadClient('slot')
-
   const ctx = clientCtx()
   exported.apply(ctx)
 
@@ -530,7 +370,7 @@ test('apply 在 effect 里登记语言包 —— 不登记的话 label 查的是
   const ctx = clientCtx()
   exported.apply(ctx)
 
-  assert.equal(ctx.effects.length, 1, '语言包登记必须挂 effect，随插件卸载一起清理')
+  assert.equal(ctx.effects.length, 1, '语言包登记必须挂在 effect 上，随插件卸载')
   assert.equal(ctx.effects[0].label, 'dsh-settings-roam: section dictionaries')
 
   // effect 在真上下文里由 Cordis 执行；这里手动跑一遍看登记了什么
@@ -576,29 +416,404 @@ test('apply 注册的标签优先取语言包', async () => {
   assert.equal(ctx.registered[0].spec.label(), '设置漫游（译）')
 })
 
-// ─── U1：推送前必须先确认 ────────────────────────────────────────────
+// ─── 视觉：用宿主的设计系统，不是浏览器默认样式 ──────────────────────
+// 用户原话（m02561）：「设置界面很丑」。真浏览器复现确认：裸 h('div')/h('button')
+// 拿到的是浏览器默认样式（灰色系统方块按钮、默认字号行高），与旁边官方分区
+// 不像同一个软件。以下几条把「以后不许再退回裸元素」固化下来。
 
-/**
- * 把元素树展开到「宿主元素」一层。
- *
- * 测试用的 createElement 不认识函数型 type，所以 h(Section, …) 产出的树里
- * 仍嵌着 {type: Pending, props} 这样的组件元素。真正渲染它们要 React；
- * 这里只需要它们的输出，于是手动调一次。
- */
-function render(el) {
-  if (el === null || el === undefined || typeof el !== 'object') return el
-  if (typeof el.type === 'function') return render(el.type(el.props ?? {}))
-  return {
-    ...el,
-    children: (el.children ?? []).map(render).filter(c => c !== null && c !== undefined),
+test('界面用宿主提供的组件，而不是裸 HTML 元素', async () => {
+  const exported = await loadClient('primitives')
+  const section = render(exported.Section({
+    state: { kind: 'clean', status: { configured: true }, form: fakeForm() },
+    actions: {},
+  }))
+  const configCard = byClass(section, 'roam-card roam-config')
+  const field = byClass(configCard, 'roam-field')
+
+  assert.ok(isInput(byClass(field, 'roam-field-input')), '输入框要用宿主的 Input')
+  assert.ok(
+    (byClass(section, 'roam-actions').children ?? []).filter(isButton).length === 3,
+    '三个动作都要用宿主的 Button',
+  )
+})
+
+test('源码里不再有自带样式的裸按钮 —— 这才是「丑」的根源', () => {
+  const src = read('client.js')
+  assert.ok(!/'roam-button'/.test(src), '自定义按钮类名是上一版的做法，已由宿主 Button 取代')
+  assert.ok(!/'roam-input'/.test(src), '自定义输入框类名同上')
+  // 允许的唯一例外是「界面组件取不到」时的降级路径，它只能落在裸元素上
+  assert.ok(
+    (src.match(/h\('button', \{/g) ?? []).length <= 1,
+    '裸 button 只应出现在降级路径里',
+  )
+})
+
+test('界面组件取不到时降级为可用元素，而不是整节崩掉', async () => {
+  const exported = await loadClient('primitives-missing', { withoutPrimitives: true })
+  assert.ok(
+    exported.warned.some(w => w.includes('界面组件')),
+    '降级要留下痕迹，不能静默',
+  )
+  const section = render(exported.Section({
+    state: { kind: 'clean', status: { configured: true } },
+    actions: {},
+  }))
+  const buttons = (byClass(section, 'roam-actions').children ?? []).filter(c => c?.type === 'button')
+  assert.equal(buttons.length, 3, '降级后仍要给出三个可点的按钮，只是没有宿主的样式')
+})
+
+test('样式表按 id 幂等注入 —— 反复挂载不堆样式', () => {
+  const src = read('client.js')
+  assert.match(src, /getElementById\(STYLE_ID\)/, '注入前必须按 id 判重')
+  assert.match(src, /const STYLE_ID = '/, '样式表要有稳定 id')
+})
+
+test('样式用设计令牌，不写死颜色 —— 暗色主题下不能是白底黑字', () => {
+  const src = read('client.js')
+  const css = src.slice(src.indexOf('const CSS = ['), src.indexOf("].join('')"))
+  assert.ok(css.includes('var(--dsw-'), '样式必须用宿主的设计令牌')
+  assert.ok(
+    !/#[0-9a-fA-F]{3,8}\b/.test(css),
+    '不得写死颜色 —— 写死就跟着主题一起错',
+  )
+  // 字体只有「等宽展示路径」这一处需要自己指定，其余一律继承宿主
+  const withFamily = css.match(/[^{}]*\{[^}]*font-family[^}]*\}/g) ?? []
+  assert.equal(withFamily.length, 1, '不应该到处自己指定字体')
+  assert.match(withFamily[0], /roam-path/, '唯一该自己指定字体的是等宽显示的路径')
+})
+
+// ─── 状态行 ──────────────────────────────────────────────────────────
+
+test('状态行的每一类状态各给一句极简文案（U3）', async () => {
+  const exported = await loadClient('u3')
+
+  // busy 与 loading 共用「正在进行」的措辞是刻意的，所以这里给 busy 带上具体动作
+  const cases = [
+    ['loading', {}],
+    ['busy', { text: '正在准备这次推送…' }],
+    ['error', { message: '云端仓库地址不对。' }],
+    ['needs-config', {}],
+    ['empty-cloud', {}],
+    ['has-diff', {}],
+    ['review', {}],
+    ['done', {}],
+    ['clean', {}],
+  ]
+  const texts = new Set()
+  for (const [kind, extra] of cases) {
+    const el = render(exported.StatusLine({ state: { kind, count: 3, ...extra } }))
+    const text = String(el.children.find(c => c?.type === 'span')?.children?.[0] ?? '')
+    assert.ok(text.length > 0, `${kind} 必须有文案`)
+    // 极简：不铺垫、不解释设计意图，一句话说清
+    assert.ok(text.split('。').filter(Boolean).length <= 2, `${kind} 的文案不应超过一句话`)
+    texts.add(text)
   }
-}
+  assert.equal(texts.size, cases.length, '各类状态的文案必须彼此不同')
+})
+
+test('状态是带状态点的，不只是文字 —— 「一眼看出」靠形态', async () => {
+  const exported = await loadClient('statedot')
+  const el = render(exported.StatusLine({ state: { kind: 'has-diff', count: 2 } }))
+  assert.ok(el.children.some(c => c?.type === PRIMITIVES.StateDot), '要有状态点')
+  assert.equal(el.props['data-tone'], 'warning', '语气要落在属性上，交给样式表处理')
+})
+
+test('未配置云端仓库时，拉取与推送必须是禁用的', async () => {
+  const exported = await loadClient('disabled')
+  const section = render(exported.Section({
+    state: { kind: 'needs-config', status: { configured: false } },
+    actions: {},
+  }))
+  const buttons = (byClass(section, 'roam-actions').children ?? []).filter(isButton)
+  // 点下去必然失败的按钮，和「按钮没接上线」在用户眼里是同一件事
+  assert.equal(buttons[0].props.disabled, false, '导出不依赖云端，必须可点')
+  assert.equal(buttons[1].props.disabled, true, '未配置时拉取要禁用')
+  assert.equal(buttons[2].props.disabled, true, '未配置时推送要禁用')
+})
+
+test('加载中与执行中禁用全部动作 —— 不给双击留下第二次请求', async () => {
+  const exported = await loadClient('busy')
+  for (const kind of ['loading', 'busy']) {
+    const section = render(exported.Section({
+      state: { kind, status: { configured: true } },
+      actions: {},
+    }))
+    const buttons = (byClass(section, 'roam-actions').children ?? []).filter(isButton)
+    assert.ok(buttons.every(b => b.props.disabled === true), `${kind} 时三个按钮都该禁用`)
+  }
+})
+
+// ─── 配置项（用户要求「设置页面要有基础的配置选项」）──────────────────
+// 地址／选项一律不硬编码进源码：写在源码里的选项，改一次要重新装一次插件。
+// 四个字段由 index.js 的 Config schema 自动生成表单，这里锁住界面这一侧。
+
+test('配置卡列出四个字段，且每个字段都带说明文字', async () => {
+  const exported = await loadClient('config-fields')
+  const card = render(exported.ConfigCard({ form: fakeForm(), t: exported.makeT('zh') }))
+
+  assert.equal(byClass(card, 'roam-card-title').children[0], '云端仓库')
+  const fields = (card.children ?? []).filter(c => c?.props?.className === 'roam-field')
+  assert.equal(fields.length, 4, '四个字段都要出现在界面上')
+  for (const field of fields) {
+    const label = byClass(field, 'roam-field-label')
+    const hint = byClass(field, 'roam-field-hint')
+    assert.ok(label?.children?.[0]?.length > 0, '每个字段都要有标签')
+    assert.ok(hint?.children?.[0]?.length > 10, '每个字段都要有说明 —— 键名敲错了既不报错也不生效')
+  }
+})
+
+test('尚未生效的字段必须在说明里自称尚未生效', async () => {
+  const exported = await loadClient('config-stage')
+  const card = render(exported.ConfigCard({ form: fakeForm(), t: exported.makeT('zh') }))
+  const fields = (card.children ?? []).filter(c => c?.props?.className === 'roam-field')
+  const hints = fields.map(f => byClass(f, 'roam-field-hint').children[0])
+  assert.ok(
+    hints.some(h => /尚未生效|占位/.test(h)),
+    'importRoot 现在填了也不起作用，必须在界面上写清楚',
+  )
+})
+
+test('输入框显示配置里当下的值', async () => {
+  const exported = await loadClient('config-values')
+  const form = fakeForm({ snapshot: { value: { repoUrl: 'https://example.com/a.git' } } })
+  const card = render(exported.ConfigCard({ form, t: exported.makeT('zh') }))
+  const fields = (card.children ?? []).filter(c => c?.props?.className === 'roam-field')
+  const inputs = fields.map(f => byClass(f, 'roam-field-input'))
+  assert.equal(inputs[0].props.value, 'https://example.com/a.git')
+  assert.equal(inputs[1].props.value, '', '没填过的字段显示为空，不是 undefined')
+})
+
+test('改动后失焦即提交，提交的是输入框里当下的值', async () => {
+  const exported = await loadClient('config-commit')
+  const form = fakeForm({ snapshot: { value: { repoUrl: 'old' } } })
+  const card = render(exported.ConfigCard({ form, t: exported.makeT('zh') }))
+  const input = byClass(
+    (card.children ?? []).find(c => c?.props?.className === 'roam-field'),
+    'roam-field-input',
+  )
+
+  const outcome = await input.props.onBlur({ target: { value: 'https://new.example.com/x.git' } })
+  assert.equal(outcome, 'ok')
+  assert.deepEqual(form.calls.set, [['repoUrl', 'https://new.example.com/x.git']])
+
+  input.props.onChange({ target: { value: 'typed' } })
+  assert.equal(form.calls.set.length, 1, 'onChange 只改草稿，不落盘')
+})
+
+test('保存成功后回头问一次宿主状态 —— 否则「已保存」与点不动的按钮并存', async () => {
+  const exported = await loadClient('config-saved-callback')
+  const form = fakeForm({ snapshot: { value: { repoUrl: 'old' } } })
+  let savedCount = 0
+  const card = render(exported.ConfigCard({
+    form,
+    t: exported.makeT('zh'),
+    onSaved: () => { savedCount += 1 },
+  }))
+  const input = byClass(
+    (card.children ?? []).find(c => c?.props?.className === 'roam-field'),
+    'roam-field-input',
+  )
+
+  await input.props.onBlur({ target: { value: 'https://new.example.com/x.git' } })
+  assert.equal(savedCount, 1, '保存成功必须触发一次刷新')
+
+  // 反向对照：被拒绝的写入不能刷新——那会让界面显示「宿主已接受」，
+  // 而实际什么都没落盘。
+  const refused = fakeForm({ snapshot: { value: { repoUrl: 'old' } }, accept: false })
+  const refusedCard = render(exported.ConfigCard({
+    form: refused,
+    t: exported.makeT('zh'),
+    onSaved: () => { savedCount += 1 },
+  }))
+  const refusedInput = byClass(
+    (refusedCard.children ?? []).find(c => c?.props?.className === 'roam-field'),
+    'roam-field-input',
+  )
+  await refusedInput.props.onBlur({ target: { value: 'nope' } })
+  assert.equal(savedCount, 1, '写入被拒时不该刷新')
+})
+
+test('清空字段即清除该配置项 —— 不是写一个空字符串进去', async () => {
+  const exported = await loadClient('config-unset')
+  const form = fakeForm({ snapshot: { value: { repoUrl: 'https://old' } } })
+  const card = render(exported.ConfigCard({ form, t: exported.makeT('zh') }))
+  const input = byClass(
+    (card.children ?? []).find(c => c?.props?.className === 'roam-field'),
+    'roam-field-input',
+  )
+
+  await input.props.onBlur({ target: { value: '' } })
+  assert.deepEqual(form.calls.unset, ['repoUrl'])
+  assert.deepEqual(form.calls.set, [], '清空不该写成空的字符串')
+})
+
+test('值没变就不提交 —— 不制造无意义的写盘', async () => {
+  const exported = await loadClient('config-noop')
+  const form = fakeForm({ snapshot: { value: { repoUrl: 'same' } } })
+  const card = render(exported.ConfigCard({ form, t: exported.makeT('zh') }))
+  const input = byClass(
+    (card.children ?? []).find(c => c?.props?.className === 'roam-field'),
+    'roam-field-input',
+  )
+
+  assert.equal(await input.props.onBlur({ target: { value: 'same' } }), 'unchanged')
+  assert.deepEqual(form.calls.set, [])
+  assert.deepEqual(form.calls.unset, [])
+})
+
+test('宿主拒绝写入时如实返回，不谎报成功', async () => {
+  const exported = await loadClient('config-refused')
+  const form = fakeForm({ snapshot: { value: { repoUrl: 'old' } }, accept: false })
+  const card = render(exported.ConfigCard({ form, t: exported.makeT('zh') }))
+  const input = byClass(
+    (card.children ?? []).find(c => c?.props?.className === 'roam-field'),
+    'roam-field-input',
+  )
+
+  assert.equal(await input.props.onBlur({ target: { value: 'new' } }), 'refused')
+
+  // configForms 只回一个布尔，宿主的原始理由到不了前端。
+  // 所以失败文案必须自己把最常见的原因说清楚，否则用户看到的是一句无解的「保存失败」。
+  const t = exported.makeT('zh')
+  const shown = exported.describeNote(exported.failureNote('', t), { status: 'ready' }, t)
+  assert.ok(/没有保存成功/.test(shown), '要说清楚这次没保存成功')
+  assert.ok(/覆盖|别处/.test(shown), '要点出「这个条目在别处也被声明了」这个最常见的原因')
+})
+
+test('宿主抛出具体理由时，把它一并显示出来', async () => {
+  const exported = await loadClient('config-throw')
+  const form = fakeForm({
+    snapshot: { value: { repoUrl: 'old' } },
+    reject: new Error('boom-detail'),
+  })
+  const card = render(exported.ConfigCard({ form, t: exported.makeT('zh') }))
+  const input = byClass(
+    (card.children ?? []).find(c => c?.props?.className === 'roam-field'),
+    'roam-field-input',
+  )
+  assert.equal(await input.props.onBlur({ target: { value: 'new' } }), 'failed')
+
+  const t = exported.makeT('zh')
+  const shown = exported.describeNote(exported.failureNote('boom-detail', t), { status: 'ready' }, t)
+  assert.match(shown, /boom-detail/, '宿主给了理由就不能吞掉')
+})
+
+test('表单取不到时说清是取不到，而不是给一片空白', async () => {
+  const exported = await loadClient('config-unavailable')
+  const form = fakeForm({ snapshot: { status: 'unavailable' } })
+  const card = render(exported.ConfigCard({ form, t: exported.makeT('zh') }))
+  const text = flat(card)
+  assert.ok(/不可编辑|尚未就绪|还没就绪|取不到/.test(text), '要给一句能行动的话')
+  assert.equal((card.children ?? []).some(c => c?.props?.className === 'roam-field'), false, '取不到就不渲染空输入框')
+})
+
+test('resolveForm 按 schema 形状认出自己的命名空间', async () => {
+  const exported = await loadClient('resolve-form')
+  const form = fakeForm()
+  const configForms = {
+    describe: () => ({ getSnapshot: () => ({ view: { namespaces: [namespaceView('someone-else', ['a']), namespaceView('dsh-settings-roam')] } }) }),
+    get: ns => (ns === 'dsh-settings-roam' ? form : null),
+  }
+  assert.equal(exported.resolveForm(configForms), form)
+})
+
+test('resolveForm 在表单还没就绪时返回 null，而不是抛错', async () => {
+  const exported = await loadClient('resolve-form-empty')
+  assert.equal(exported.resolveForm(undefined), null)
+  assert.equal(exported.resolveForm({}), null)
+  assert.equal(exported.resolveForm({ get: () => null, describe: () => { throw new Error('还没就绪') } }), null)
+  assert.equal(exported.resolveForm({ get: () => null, describe: () => ({ getSnapshot: () => ({ view: { namespaces: [] } }) }) }), null)
+})
+
+// ─── 概述显示（用户要求「页面上要有概述」）────────────────────────────
+// 取向：只给概述，不铺开逐项清单。要看细节去打开导出的文件。
+
+test('概述渲染计数与「去哪看详情」的路径', async () => {
+  const exported = await loadClient('ov')
+  const state = {
+    overview: {
+      title: '本次将同步',
+      stats: [
+        { label: '公共配置', value: 1 },
+        { label: '技能', value: 2 },
+        { label: '插件', value: 3 },
+      ],
+      meta: ['2026-10-15 09:07', '来自 machine-a'],
+      location: '/x/export/1',
+    },
+  }
+  const out = flat(render(exported.Overview({ state })))
+
+  assert.ok(out.includes('本次将同步'), '要有标题')
+  assert.ok(out.includes('公共配置') && out.includes('技能') && out.includes('插件'), '三类计数都要有')
+  assert.ok(out.includes('2026-10-15 09:07'), '要有时间')
+  assert.ok(out.includes('machine-a'), '要标明来源机器')
+  assert.ok(out.includes('/x/export/1'), '要给出详情所在路径')
+})
+
+test('概述只给概述 —— 不把逐项文件清单铺进界面', async () => {
+  const exported = await loadClient('ov-list')
+  const state = {
+    overview: {
+      title: '本次将同步',
+      stats: [{ label: '技能', value: 2 }],
+      meta: [],
+      location: '/x/export/1',
+      // 即便宿主多传了文件清单，界面也不应逐项铺开
+      files: [{ path: 'skills/one/SKILL.md' }, { path: 'skills/three/SKILL.md' }],
+    },
+  }
+  const out = flat(render(exported.Overview({ state })))
+  assert.ok(!out.includes('skills/one'), '不逐项列出文件路径')
+  assert.ok(!out.includes('skills/three'), '不逐项列出文件路径')
+})
+
+test('没有概述数据时不渲染空壳', async () => {
+  const exported = await loadClient('ov-empty')
+  assert.equal(exported.Overview({ state: {} }), null)
+  assert.equal(exported.Overview({ state: undefined }), null)
+  assert.equal(exported.Overview({ state: { overview: null } }), null)
+})
+
+test('落盘路径给一个「复制」动作 —— 路径在浏览器里点不开', async () => {
+  const exported = await loadClient('ov-copy')
+  const copied = []
+  const state = { overview: { title: 't', stats: [], location: '/x/y' } }
+  const el = render(exported.Overview({ state, actions: { onCopyPath: p => copied.push(p) } }))
+
+  const loc = byClass(el, 'roam-loc')
+  const button = (loc.children ?? []).filter(isButton)[0]
+  assert.ok(button, '给了 onCopyPath 就该渲染复制按钮')
+  button.props.onClick()
+  assert.deepEqual(copied, ['/x/y'])
+})
+
+test('没有复制动作时不渲染按钮 —— 不给出点了没反应的控件', async () => {
+  const exported = await loadClient('ov-nocopy')
+  const el = render(exported.Overview({ state: { overview: { title: 't', stats: [], location: '/x/y' } } }))
+  assert.ok(flat(el).includes('/x/y'), '路径仍要显示出来，让用户能自己找过去')
+  assert.equal((byClass(el, 'roam-loc').children ?? []).filter(isButton).length, 0, '但不应有无效按钮')
+})
+
+// ─── 跳过项 ──────────────────────────────────────────────────────────
+
+test('跳过项渲染的是说明文字，不是失败计数（§3.4）', async () => {
+  const exported = await loadClient('skip')
+  const item = { name: 'demo-plugin', explanation: '把它发布到 registry 之后才能同步过来。' }
+  const out = flat(render(exported.Section({ state: { kind: 'has-diff', count: 1, skipped: [item] } })))
+
+  assert.ok(out.includes('demo-plugin'), '要显示是哪个插件')
+  assert.ok(out.includes('发布到 registry'), '必须给出可行动的说明')
+  assert.ok(!/失败\s*\d+|skip count/i.test(out), '不得退化成失败计数')
+})
+
+// ─── U1：推送前必须先确认 ────────────────────────────────────────────
 
 test('待确认区块给出「确认」与「取消」两个动作', async () => {
   const exported = await loadClient('pending')
   const clicked = []
   const state = {
-    kind: 'clean',
+    kind: 'review',
     pending: { kind: 'push', token: 'tok-1', text: '将推送 3 个文件', confirmLabel: '确认推送' },
   }
   const actions = {
@@ -607,13 +822,10 @@ test('待确认区块给出「确认」与「取消」两个动作', async () =>
   }
 
   const section = render(exported.Section({ state, actions }))
-  // 待确认区在动作区内部，作为按钮的兄弟节点
-  const actionsEl = section.children.find(c => c?.props?.className === 'roam-actions')
-  const pending = actionsEl.children.find(c => c?.props?.className === 'roam-pending')
+  const pending = byClass(section, 'roam-card roam-pending')
   assert.ok(pending, '有待确认内容时必须渲染出来 —— 确认点得看得见')
 
-  const buttons = pending.children.find(c => c?.props?.className === 'roam-pending-actions').children
-  // createElement 的 children 是数组，取第一个作为按钮文字
+  const buttons = (byClass(pending, 'roam-pending-actions').children ?? []).filter(isButton)
   assert.deepEqual(buttons.map(b => b.children[0]), ['确认推送', '取消'])
 
   buttons[0].props.onClick()
@@ -621,14 +833,24 @@ test('待确认区块给出「确认」与「取消」两个动作', async () =>
   assert.deepEqual(clicked, ['confirm', 'cancel'])
 })
 
+test('配置保存后的刷新回调要一路传到配置卡 —— 断在中间就退回「点了没反应」', async () => {
+  const exported = await loadClient('saved-wiring')
+  const onSaved = () => {}
+  // 刻意不调 render()：一旦展开，配置卡就只剩渲染结果，看不到它收到的 props。
+  const section = exported.Section({
+    state: { kind: 'needs-config', form: fakeForm() },
+    actions: { onSaved },
+  })
+  // Section 是纯展示组件，配置卡以组件元素的形式嵌在树里，props 直接可查。
+  const card = (section.children ?? []).find(c => c?.type === exported.ConfigCard)
+  assert.ok(card, '有表单时必须渲染配置卡')
+  assert.equal(card.props.onSaved, onSaved, '刷新回调必须传到配置卡')
+})
+
 test('没有待确认内容时不渲染待确认区 —— 不给空壳', async () => {
   const exported = await loadClient('pending2')
   const section = render(exported.Section({ state: { kind: 'clean' }, actions: {} }))
-  const actionsEl = section.children.find(c => c?.props?.className === 'roam-actions')
-  assert.ok(
-    !actionsEl.children.some(c => c?.props?.className === 'roam-pending'),
-    '没有 pending 时不该出现确认区',
-  )
+  assert.equal(byClass(section, 'roam-card roam-pending'), undefined, '没有 pending 时不该出现确认区')
 })
 
 test('确认时必须带上预览时发的 token —— 否则预览只是装饰', async () => {
@@ -642,7 +864,6 @@ test('确认时必须带上预览时发的 token —— 否则预览只是装饰
 test('推送与拉取都走「预览→确认」两段，没有一键直发', async () => {
   const src = read('client.js')
   assert.match(src, /step:\s*'prepare'/, '要有预览阶段')
-  // 预览后按钮变成「确认」，而不是再点一次就执行
   assert.match(src, /pending/, '预览结果要落到待确认状态里')
   assert.ok(
     !/onClick:\s*\(\)\s*=>\s*request\([^)]*['"]?confirm/.test(src),
@@ -650,15 +871,28 @@ test('推送与拉取都走「预览→确认」两段，没有一键直发', as
   )
 })
 
+test('预览之后停在「待确认」，不能显示成已完成', async () => {
+  const src = read('client.js')
+  const body = src.slice(src.indexOf('const begin = React.useCallback'), src.indexOf('const confirm = React.useCallback'))
+  // 预览那一瞬间什么都还没写。原先这里写成 kind:'done'（推送）与 'has-diff'（拉取），
+  // 用户看到的是「已完成」，而实际上还要点一次「确认」。
+  assert.ok(
+    /kind:\s*'review'/.test(body),
+    '预览后必须进入 review 状态 —— 显示「已完成」会让用户以为已经写完了',
+  )
+  assert.ok(!/kind:\s*'done'/.test(body), '预览不是完成')
+})
+
+// ─── 动作区 ──────────────────────────────────────────────────────────
+
 test('动作区第一个是「导出到文件」—— 唯一不依赖云端仓库的动作', async () => {
-  const exported = await loadClient('export-btn')
+  const exported = await loadClient('actions')
   const clicked = []
   const section = render(exported.Section({
-    state: { kind: 'clean' },
+    state: { kind: 'clean', status: { configured: true } },
     actions: { onExport: () => clicked.push('export'), onPull: () => {}, onPush: () => {} },
   }))
-  const actionsEl = section.children.find(c => c?.props?.className === 'roam-actions')
-  const buttons = actionsEl.children.filter(c => c?.type === 'button')
+  const buttons = (byClass(section, 'roam-actions').children ?? []).filter(isButton)
 
   assert.equal(buttons[0].children[0], '导出到文件', '第一次打开这一节最该点的是它')
   assert.deepEqual(buttons.slice(1).map(b => b.children[0]), ['拉取', '推送'])
@@ -669,7 +903,7 @@ test('动作区第一个是「导出到文件」—— 唯一不依赖云端仓�
 test('导出不经过确认流程 —— 无副作用的本地动作不该多点两次', async () => {
   const src = read('client.js')
   const body = src.slice(src.indexOf('const beginExport'), src.indexOf('/** 统一处理'))
-  assert.ok(body.includes("ROUTES.export"), '导出要打导出路由')
+  assert.ok(body.includes('ROUTES.export'), '导出要打导出路由')
   assert.ok(!body.includes('pending'), '导出不产生待确认状态')
-  assert.ok(!body.includes("step:"), '导出没有 prepare/confirm 两段')
+  assert.ok(!body.includes('step:'), '导出没有 prepare/confirm 两段')
 })

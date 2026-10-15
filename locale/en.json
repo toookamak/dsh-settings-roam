@@ -4,8 +4,71 @@
     "description": "Push portable settings to the cloud, pull them back on a new machine."
   },
   "nav": "Settings Roam",
-  "section": {
+  "title": "Settings Roam",
+  "intro": "This section only carries settings that can travel (models and endpoints). Machine addresses, theme, tool permissions, and the default model stay here.",
+  "config": {
+    "title": "Cloud repository",
+    "loading": "Reading configuration…",
+    "unavailable": "The settings service is not ready, so these fields cannot be edited yet. Reload the page and try again.",
+    "saving": "Saving…",
+    "saved": "Saved.",
+    "failed": "The change was not saved. This entry is most likely declared somewhere else too (for example the profile cordis.patch.yml or the command line), which would override the edit.",
+    "repoUrl": {
+      "label": "Repository URL",
+      "hint": "Remote Git repository. Push and Pull become available once this is set."
+    },
+    "profileName": {
+      "label": "Profile to sync",
+      "hint": "Leave empty to detect automatically. Required when this machine has several profiles."
+    },
+    "exportRoot": {
+      "label": "Export directory",
+      "hint": "Export to file writes the backup here. Empty uses the default directory."
+    },
+    "importRoot": {
+      "label": "Import directory (not active yet)",
+      "hint": "Not active yet — read in phase two. Setting it now has no effect."
+    }
+  },
+  "status": {
+    "loading": "Reading local settings…",
+    "needsConfig": "No cloud repository yet. Fill in the repository URL above to enable pushing.",
+    "emptyCloud": "The cloud is still empty. Export or push once from this machine first.",
+    "clean": "In sync with this machine.",
+    "diff": "{n} changes on the cloud are waiting to be pulled.",
+    "review": "Check the differences above; nothing is written until you confirm.",
+    "error": "The operation failed. Try again."
+  },
+  "busy": {
+    "status": "Reading local settings…",
+    "export": "Writing the backup to disk…",
+    "pushPrepare": "Working out what would be pushed…",
+    "pullPrepare": "Comparing with the cloud…",
+    "pushConfirm": "Pushing…",
+    "pullConfirm": "Applying…"
+  },
+  "action": {
+    "export": "Export to file",
     "pull": "Pull",
-    "push": "Push"
+    "push": "Push",
+    "confirm": "Confirm",
+    "confirmPush": "Confirm push",
+    "confirmPull": "Confirm pull",
+    "cancel": "Cancel",
+    "copy": "Copy path",
+    "copied": "Copied"
+  },
+  "pending": {
+    "push": "This pushes {files} files, {n} of them differing from the cloud. Confirm to write it.",
+    "pull": "The cloud holds {remote} entries, {n} of them differing from this machine. Confirm to change this machine."
+  },
+  "overview": {
+    "title": "What this sync covered"
+  },
+  "skips": {
+    "title": "These stayed on this machine"
+  },
+  "result": {
+    "done": "Done."
   }
 }
