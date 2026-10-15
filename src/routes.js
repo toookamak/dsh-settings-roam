@@ -40,6 +40,7 @@ export const ROUTES = {
   import: `${ROUTE_PREFIX}.import`,
   push: `${ROUTE_PREFIX}.push`,
   pull: `${ROUTE_PREFIX}.pull`,
+  edit: `${ROUTE_PREFIX}.edit`,
 }
 
 /**
@@ -116,7 +117,7 @@ export function createRouteHandlers(deps) {
 
   /**
    * 存一份待确认的计划，返回它的 token。
-   * @param {'push'|'pull'|'import'} kind
+   * @param {'push'|'pull'|'import'|'edit'} kind
    * @param {object} plan
    * @returns {string}
    */
@@ -133,7 +134,7 @@ export function createRouteHandlers(deps) {
    * 从没预览过 → 先点一次；带了别的 token → 那次预览已经作废；
    * 放太久 → 重新预览，免得拿一份十分钟前的差异去覆盖现在的本机。
    *
-   * @param {'push'|'pull'|'import'} kind
+   * @param {'push'|'pull'|'import'|'edit'} kind
    * @param {unknown} token
    * @returns {{ok: true, plan: object} | {ok: false, error: string}}
    */
@@ -178,6 +179,9 @@ export function createRouteHandlers(deps) {
       excludedCount: inspected.excludedIds.length,
       skillCount: inspected.skills.length,
       skillCheck: inspected.skillCheck,
+      // 可编辑的公共条目。列表为空时界面不渲染编辑区，
+      // 而不是给一个点不动的空壳。
+      editableEntries: service.listEditableEntries(),
     }
   }
 
@@ -289,6 +293,57 @@ export function createRouteHandlers(deps) {
   }
 
   /**
+   * 配置编辑：prepare 算出改完的样子，confirm 才写回本机。
+   *
+   * 与同步走同一条写路径（备份 → 合并 → 写后回读）。这一点是刻意的：
+   * 「同步会备份、手改不会」这种不一致，最后一定会以「我改了配置结果回不去了」
+   * 的形式找上门来。
+   *
+   * @param {Request} request
+   */
+  const edit = async (request) => {
+    const body = await readBody(request)
+    const step = body.step ?? 'prepare'
+
+    if (step === 'prepare') {
+      const plan = await service.prepareEdit({
+        id: body.id,
+        set: body.set,
+        unset: body.unset,
+        edits: body.edits,
+        types: body.types,
+      })
+      return jsonResponse({
+        ok: true,
+        step,
+        token: stash('edit', plan),
+        id: plan.id,
+        changed: plan.changed,
+        fields: plan.fields,
+        // 改了但没变化时界面要说「跟原来一样」，而不是假报一次成功。
+        noop: plan.changed.length === 0,
+      })
+    }
+
+    if (step === 'confirm') {
+      const taken = take('edit', body.token)
+      if (!taken.ok) return jsonResponse({ ok: false, error: taken.error }, 409)
+      const result = await service.applyEdit(taken.plan, {
+        backupRoot: service.defaultBackupRoot(),
+      })
+      return jsonResponse({
+        ok: true,
+        step,
+        id: result.id,
+        changed: result.changed,
+        backupPath: result.backupPath,
+      })
+    }
+
+    return jsonResponse({ ok: false, error: `不认识的 step：${String(step)}` }, 400)
+  }
+
+  /**
    * 导入：prepare 说清会写什么、不写什么，confirm 才动本机文件。
    *
    * 与「拉取」的区别值得说清，因为界面上这两个按钮长得像：
@@ -374,6 +429,10 @@ export function createRouteHandlers(deps) {
         if (request.method !== 'POST') return jsonResponse({ ok: false, error: '拉取需要 POST' }, 405)
         return await pull(request)
       }
+      if (path === ROUTES.edit) {
+        if (request.method !== 'POST') return jsonResponse({ ok: false, error: '编辑需要 POST' }, 405)
+        return await edit(request)
+      }
       return jsonResponse({ ok: false, error: '没有这个路由' }, 404)
     } catch (error) {
       // 失败也要说清是什么失败：界面把这句话直接显示给用户。
@@ -398,5 +457,6 @@ export function describeRoutes(deps) {
     { path: ROUTES.import, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
     { path: ROUTES.push, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
     { path: ROUTES.pull, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
+    { path: ROUTES.edit, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
   ]
 }

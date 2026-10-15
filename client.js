@@ -139,6 +139,8 @@ window.__ModuleLoader__.load({
           pullPrepare: '正在算云端差异…',
           importPrepare: '正在核对导入包…',
           importConfirm: '正在写回本机…',
+          editPrepare: '正在核对改了什么…',
+          editConfirm: '正在写回配置…',
           pushConfirm: '正在推送…',
           pullConfirm: '正在应用…',
         },
@@ -151,6 +153,7 @@ window.__ModuleLoader__.load({
           confirmPush: '确认推送',
           confirmPull: '确认拉取',
           confirmImport: '确认导入',
+          confirmEdit: '确认改动',
           cancel: '取消',
           copy: '复制路径',
           copied: '已复制',
@@ -159,9 +162,17 @@ window.__ModuleLoader__.load({
           push: '将推送 {files} 个文件，其中 {n} 项与云端不同。确认后写入云端。',
           pull: '云端有 {remote} 条配置，其中 {n} 项与本机不同。确认后改动本机。',
           import: '将写回 {n} 项，本机原有的监听地址、主题等不受影响。确认后改动本机。',
+          edit: '将改动 {n} 处配置。确认后写入并重跑插件。',
         },
         compat: {
           blocked: '上面这些必须先处理：直接写下去不会报错，但也不会生效。',
+        },
+        edit: {
+          title: '可移植的配置',
+          intro: '这些是会跟着走的配置（{name}）。改完点保存，会先给你看改了哪几项。',
+          save: '保存修改',
+          removed: '（删除这一项）',
+          noop: '跟原来一样，没有需要改的。',
         },
         overview: { title: '这次同步了什么' },
         skips: { title: '这些项留在了本机' },
@@ -219,6 +230,8 @@ window.__ModuleLoader__.load({
           pullPrepare: 'Comparing with the cloud…',
           importPrepare: 'Checking the package…',
           importConfirm: 'Writing back to this machine…',
+          editPrepare: 'Checking what changed…',
+          editConfirm: 'Writing the change…',
           pushConfirm: 'Pushing…',
           pullConfirm: 'Applying…',
         },
@@ -231,6 +244,7 @@ window.__ModuleLoader__.load({
           confirmPush: 'Confirm push',
           confirmPull: 'Confirm pull',
           confirmImport: 'Confirm import',
+          confirmEdit: 'Confirm change',
           cancel: 'Cancel',
           copy: 'Copy path',
           copied: 'Copied',
@@ -238,9 +252,18 @@ window.__ModuleLoader__.load({
         pending: {
           push: 'This pushes {files} files, {n} of them differing from the cloud. Confirm to write it.',
           pull: 'The cloud holds {remote} entries, {n} of them differing from this machine. Confirm to change this machine.',
+          import: 'This writes {n} items. This machine\u2019s own listen address, theme, and so on are left alone. Confirm to change this machine.',
+          edit: 'This changes {n} settings. Confirm to write them and reload the plugin.',
         },
         compat: {
           blocked: 'Fix the items above first: writing them now would silently do nothing.',
+        },
+        edit: {
+          title: 'Portable settings',
+          intro: 'These are the settings that travel ({name}). Save, and you will see exactly what changed first.',
+          save: 'Save changes',
+          removed: '(remove this entry)',
+          noop: 'No change from the current settings.',
         },
         overview: { title: 'What this sync covered' },
         skips: { title: 'These stayed on this machine' },
@@ -259,6 +282,7 @@ window.__ModuleLoader__.load({
       import: '/api/settings-roam.import',
       push: '/api/settings-roam.push',
       pull: '/api/settings-roam.pull',
+      edit: '/api/settings-roam.edit',
     }
 
     /**
@@ -290,6 +314,13 @@ window.__ModuleLoader__.load({
         confirmLabel: 'action.confirmImport',
         pending: 'pending.import',
       },
+      edit: {
+        route: ROUTES.edit,
+        busyPrepare: 'busy.editPrepare',
+        busyConfirm: 'busy.editConfirm',
+        confirmLabel: 'action.confirmEdit',
+        pending: 'pending.edit',
+      },
     }
 
     /**
@@ -306,6 +337,27 @@ window.__ModuleLoader__.load({
      * ok 的那些是「不需要做什么」，逐条摆出来只会把真正要注意的几条淹掉。
      * 单列成纯函数是为了能直接断言，不必展开整棵渲染树。
      */
+    /**
+     * 把配置里的值显示成输入框里的一串文本。
+     *
+     * 数组与对象用紧凑 JSON：它们本来就是整体编辑的，换行显示反而更难改。
+     */
+    /**
+     * 差异里显示一个值。空值显示成「（空）」而不是空白，
+     * 否则用户看到的是一个指向右边的箭头，读不出改了什么。
+     */
+    function formatChange(value) {
+      if (value === undefined || value === null) return '（空）'
+      if (typeof value === 'object') return JSON.stringify(value)
+      return String(value)
+    }
+
+    function formatFieldValue(value) {
+      if (value === null || value === undefined) return ''
+      if (typeof value === 'object') return JSON.stringify(value)
+      return String(value)
+    }
+
     function compatNotable(compat) {
       if (!compat || !Array.isArray(compat.items)) return []
       return compat.items.filter(entry => entry?.level !== 'ok')
@@ -372,7 +424,8 @@ window.__ModuleLoader__.load({
       '.roam-stat-label{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
       '.roam-meta{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);display:flex;flex-direction:column;gap:2px}',
       '.roam-loc{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
-      '.roam-path{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--dsw-alias-label-secondary);word-break:break-all}',
+      '.roam-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}',
+      '.roam-path{color:var(--dsw-alias-label-secondary);word-break:break-all}',
       '.roam-skips{display:flex;flex-direction:column;gap:8px}',
       '.roam-skip{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-2)}',
       '.roam-skip-name{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
@@ -386,6 +439,10 @@ window.__ModuleLoader__.load({
       '.roam-compat-block .roam-compat-message{color:var(--dsw-alias-state-error-primary)}',
       '.roam-compat-warn .roam-compat-message{color:var(--dsw-alias-state-warn-label)}',
       '.roam-compat-action{margin:2px 0 0;color:var(--dsw-alias-label-tertiary)}',
+      '.roam-edit-fields{display:flex;flex-direction:column;gap:10px}',
+      '.roam-edit-path{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);margin:0 0 4px}',
+      '.roam-changed{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;font-size:12px;line-height:18px}',
+      '.roam-changed-path{color:var(--dsw-alias-label-secondary)}',
     ].join('')
 
     /**
@@ -540,6 +597,65 @@ window.__ModuleLoader__.load({
           },
         }),
         h('p', { className: 'roam-field-hint' }, t(`${copy}.hint`)),
+      )
+    }
+
+    /**
+     * 可移植配置的编辑卡（第四阶段）。
+     *
+     * 为什么按字段列出来而不是给一个 YAML 文本框：用户改的绝大多数是某个值。
+     * 为了改一个值去动整段 YAML，多出来的全是语法出错的机会；按字段改的话，
+     * 出错的那个字段当场就能说清是哪一项。
+     *
+     * 只列「本来就有」的字段，不在这里加新字段——加一个供应商要同时想清楚
+     * apiKeyEnv 指向哪个变量、模型列表写什么，那件事命令行做更合适。
+     */
+    function EditCard({ entry, t, onEdit }) {
+      const [drafts, setDrafts] = React.useState({})
+      if (!entry || !Array.isArray(entry.fields) || entry.fields.length === 0) return null
+
+      const dirty = Object.keys(drafts).length > 0
+      const shown = field => (drafts[field.path] !== undefined
+        ? drafts[field.path]
+        : formatFieldValue(field.value))
+
+      return h(
+        'div',
+        { className: 'roam-card roam-edit' },
+        h('p', { className: 'roam-card-title' }, t('edit.title')),
+        h('p', { className: 'roam-field-hint' }, t('edit.intro', { name: entry.name ?? entry.id })),
+        h(
+          'div',
+          { className: 'roam-edit-fields' },
+          entry.fields.map(field => h(
+            'div',
+            { className: 'roam-field', key: field.path },
+            h('p', { className: 'roam-edit-path roam-mono' }, field.path),
+            h(Input, {
+              id: `roam-edit-${field.path}`,
+              className: 'roam-field-input',
+              value: shown(field),
+              spellCheck: false,
+              autoComplete: 'off',
+              onChange: event => setDrafts(current => ({ ...current, [field.path]: event.target.value })),
+              onKeyDown: event => { if (event.key === 'Enter') event.currentTarget.blur() },
+            }),
+          )),
+        ),
+        h(
+          'div',
+          { className: 'roam-actions' },
+          h(
+            Button,
+            {
+              variant: 'primary',
+              size: 'md',
+              disabled: !dirty,
+              onClick: () => onEdit?.(entry.id, drafts),
+            },
+            t('edit.save'),
+          ),
+        ),
       )
     }
 
@@ -770,6 +886,22 @@ window.__ModuleLoader__.load({
         // 有拦下的项时不给可点的确认：这类项的特征正是「点下去不报错、也不生效」，
         // 让用户先处理掉，比让他事后从「配置看着有、行为不对」倒查要省得多。
         blocked ? h('p', { className: 'roam-compat-action' }, t('compat.blocked')) : null,
+        Array.isArray(p.changed) && p.changed.length > 0
+          ? h(
+            'ul',
+            { className: 'roam-changed' },
+            p.changed.map(item => h(
+              'li',
+              { key: item.path },
+              h('span', { className: 'roam-changed-path roam-mono' }, item.path),
+              ' ',
+              // 改之前的值也要给：只显示新值，用户没法判断这次改动是不是他想要的那次。
+              item.action === 'remove'
+                ? t('edit.removed')
+                : `${formatChange(item.from)} → ${formatChange(item.to)}`,
+            )),
+          )
+          : null,
         h(
           'div',
           { className: 'roam-pending-actions' },
@@ -806,6 +938,7 @@ window.__ModuleLoader__.load({
         ),
         h(StatusLine, { state, t }),
         state?.form ? h(ConfigCard, { form: state.form, t, onSaved: actions?.onSaved }) : null,
+        h(EditCard, { entry: state?.editable, t, onEdit: actions?.onEdit }),
         h(Overview, { state, actions, t }),
         skipped.length > 0
           ? h(
@@ -1028,6 +1161,40 @@ window.__ModuleLoader__.load({
         }
       }, [t])
 
+      /**
+       * 编辑公共配置：同样先算差异、让用户看一眼，确认后才写。
+       *
+       * 不并进 begin() 的原因很直白：begin() 是「按一次按钮跑一个固定动作」，
+       * 而编辑要带上用户刚敲进去的值。硬塞进去只会让那个函数同时管两件事。
+       */
+      const beginEdit = React.useCallback(async (id, drafts) => {
+        setState(current => ({ kind: 'busy', text: t('busy.editPrepare'), status: current.status }))
+        try {
+          const prepared = await request(ROUTES.edit, { step: 'prepare', id, set: drafts })
+          if (prepared.noop === true) {
+            setState(current => ({ kind: 'clean', text: t('edit.noop'), status: current.status }))
+            return
+          }
+          setState(current => ({
+            kind: 'review',
+            count: prepared.changed?.length ?? 0,
+            status: current.status,
+            overview: current.overview ?? null,
+            skipped: current.skipped ?? [],
+            pending: {
+              kind: 'edit',
+              token: prepared.token,
+              compat: null,
+              changed: prepared.changed ?? [],
+              confirmLabel: t('action.confirmEdit'),
+              text: t('pending.edit', { n: prepared.changed?.length ?? 0 }),
+            },
+          }))
+        } catch (error) {
+          setState(current => ({ kind: 'error', message: error.message, status: current.status }))
+        }
+      }, [t])
+
       const confirm = React.useCallback(async () => {
         const pending = state.pending
         if (!pending) return
@@ -1072,6 +1239,7 @@ window.__ModuleLoader__.load({
         onPush: () => begin('push'),
         onPull: () => begin('pull'),
         onConfirm: confirm,
+        onEdit: beginEdit,
         onCancel: () => setState(current => ({ ...current, pending: null })),
         onCopyPath: (path) => {
           try {
@@ -1169,10 +1337,13 @@ window.__ModuleLoader__.load({
       ConfigCard,
       failureNote,
       describeNote,
+      EditCard,
       Overview,
       Pending,
       SectionContainer,
       compatNotable,
+      formatFieldValue,
+      formatChange,
       LOCALES,
       flatten,
       makeT,

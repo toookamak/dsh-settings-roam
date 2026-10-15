@@ -818,3 +818,100 @@ test('导入包里的插件本机没装时，检查给出提醒但不拦写入',
   assert.ok(plan.compat.items.some(i => i.code === 'plugin-missing'))
   rmSync(root, { recursive: true })
 })
+
+test('配置编辑：只读地算出改完的样子，不动本机文件', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({ backend: fakeBackend(), workDir, dshRoot, skillsRoot })
+  const patchFile = join(dshRoot, 'profiles', 'web', 'cordis.patch.yml')
+  const before = readFileSync(patchFile, 'utf8')
+
+  const plan = await service.prepareEdit({
+    id: 'llm-pi-ai',
+    set: { 'providers.demo.apiKeyEnv': 'RENAMED_KEY' },
+  })
+
+  assert.equal(plan.id, 'llm-pi-ai')
+  assert.equal(plan.after.providers.demo.apiKeyEnv, 'RENAMED_KEY')
+  assert.equal(plan.before.providers.demo.apiKeyEnv, 'DEMO_KEY')
+  assert.deepEqual(plan.changed.map(c => c.path), ['providers.demo.apiKeyEnv'])
+  assert.equal(readFileSync(patchFile, 'utf8'), before, '算出计划不该动本机')
+  rmSync(root, { recursive: true })
+})
+
+test('配置编辑：写回后本机项一个字节不动，且能给出备份路径', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({ backend: fakeBackend(), workDir, dshRoot, skillsRoot })
+
+  const plan = await service.prepareEdit({ id: 'llm-pi-ai', set: { 'providers.demo.baseURL': 'https://new/v1' } })
+  const result = await service.applyEdit(plan, { backupRoot: join(root, 'backup') })
+
+  assert.deepEqual(result.applied, ['llm-pi-ai'])
+  assert.ok(result.backupPath !== '', '改配置前必须能回退')
+  assert.ok(existsSync(result.backupPath), '备份路径要真实存在')
+
+  const written = readFileSync(join(dshRoot, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
+  assert.match(written, /https:\/\/new\/v1/)
+  // 本机配置（监听地址那条）必须原样还在。
+  assert.match(written, /- id: webserver/)
+  assert.match(written, /10\.0\.0\.9/)
+  rmSync(root, { recursive: true })
+})
+
+test('配置编辑：新增字段默认按字符串写，不偷偷替用户猜类型', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({ backend: fakeBackend(), workDir, dshRoot, skillsRoot })
+
+  // 本机没有这个字段，就没有原类型可参照。默认当字符串是刻意的：
+  // 把 '3' 猜成数字看着贴心，实际会在别的字段上把 '0123' 变成 123。
+  const guess = await service.prepareEdit({ id: 'llm-pi-ai', set: { 'providers.demo.retries': '3' } })
+  assert.equal(guess.after.providers.demo.retries, '3')
+
+  // 明确指定类型时才按数字写。
+  const typed = await service.prepareEdit({
+    id: 'llm-pi-ai',
+    set: { 'providers.demo.retries': '3' },
+    types: { 'providers.demo.retries': 'number' },
+  })
+  assert.equal(typed.after.providers.demo.retries, 3)
+
+  // 已经在配置里的字段则按它原本的类型解析。
+  const { root: root2, dshRoot: dshRoot2, skillsRoot: skillsRoot2, workDir: workDir2 } = sandbox()
+  const service2 = createSyncService({ backend: fakeBackend(), workDir: workDir2, dshRoot: dshRoot2, skillsRoot: skillsRoot2 })
+  await assert.rejects(
+    () => service2.prepareEdit({ id: 'llm-pi-ai', set: { 'providers.demo.apiKeyEnv': 'x' }, types: { 'providers.demo.apiKeyEnv': 'number' } }),
+    err => {
+      assert.equal(err.code, 'edit-invalid')
+      assert.match(err.message, /数字/)
+      return true
+    },
+  )
+  rmSync(root, { recursive: true })
+  rmSync(root2, { recursive: true })
+})
+
+test('配置编辑：指定一个本机没有的条目时，说清有哪些可选', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({ backend: fakeBackend(), workDir, dshRoot, skillsRoot })
+
+  await assert.rejects(
+    () => service.prepareEdit({ id: 'not-here', set: { a: '1' } }),
+    err => {
+      assert.equal(err.code, 'entry-not-found')
+      assert.match(err.message, /llm-pi-ai/, '要把可选的列出来')
+      return true
+    },
+  )
+  rmSync(root, { recursive: true })
+})
+
+test('配置编辑：本机项不在可编辑列表里 —— 它们本来就不参与同步', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({ backend: fakeBackend(), workDir, dshRoot, skillsRoot })
+
+  const entries = service.listEditableEntries()
+  const ids = entries.map(e => e.id)
+  assert.ok(ids.includes('llm-pi-ai'))
+  assert.ok(!ids.includes('webserver'), '本机项不该出现在可编辑列表里')
+  assert.ok(entries[0].fields.some(f => f.path === 'providers.demo.apiKeyEnv'))
+  rmSync(root, { recursive: true })
+})

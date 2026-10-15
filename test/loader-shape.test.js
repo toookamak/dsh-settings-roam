@@ -480,7 +480,9 @@ test('样式用设计令牌，不写死颜色 —— 暗色主题下不能是白
   // 字体只有「等宽展示路径」这一处需要自己指定，其余一律继承宿主
   const withFamily = css.match(/[^{}]*\{[^}]*font-family[^}]*\}/g) ?? []
   assert.equal(withFamily.length, 1, '不应该到处自己指定字体')
-  assert.match(withFamily[0], /roam-path/, '唯一该自己指定字体的是等宽显示的路径')
+  // 等宽字体只集中在 .roam-mono 一个类里，其余一律继承宿主。
+  // 散着写的话，改一次字体就得改好几处，漏一处就是两种字体并排。
+  assert.match(withFamily[0], /roam-mono/, '唯一该自己指定字体的是等宽显示的路径')
 })
 
 // ─── 状态行 ──────────────────────────────────────────────────────────
@@ -1008,4 +1010,69 @@ test('有拦下的项时不给可点的确认 —— 这类项点下去不报错
   // 取消仍然可点：用户总得能退出去。
   const cancel = actionsRow.children.filter(isButton)[1]
   assert.notEqual(cancel.props.disabled, true)
+})
+
+// ─── 可移植配置的编辑 ────────────────────────────────────────────────
+
+test('可编辑的字段按字段逐个列出来，不给人一整段 YAML 去改', async () => {
+  const exported = await loadClient('edit-card')
+  const tree = exported.EditCard({
+    entry: {
+      id: 'llm-pi-ai',
+      name: '@deepseek-ai/llm-pi-ai',
+      fields: [
+        { path: 'providers.demo.baseURL', value: 'https://x/v1', type: 'string' },
+        { path: 'providers.demo.apiKeyEnv', value: 'DEMO_KEY', type: 'string' },
+      ],
+    },
+    t: exported.makeT('zh'),
+    onEdit: () => {},
+  })
+  const text = flat(tree)
+
+  assert.ok(text.includes('providers.demo.baseURL'), '要让人看见改的是哪一个字段')
+  assert.ok(text.includes('providers.demo.apiKeyEnv'))
+  assert.ok(!text.includes('yaml'), '不该退回「给你一个文本框自己写」')
+})
+
+test('没有改动时保存按钮点不动 —— 免得点一下才发现什么都没改', async () => {
+  const exported = await loadClient('edit-clean')
+  const tree = exported.EditCard({
+    entry: { id: 'llm-pi-ai', name: 'x', fields: [{ path: 'a', value: '1', type: 'string' }] },
+    t: exported.makeT('zh'),
+    onEdit: () => {},
+  })
+  // 按钮在 .roam-actions 里，不是卡片的直接子元素。
+  const button = byClass(tree, 'roam-actions').children.find(isButton)
+  assert.equal(button.props.disabled, true)
+})
+
+test('编辑预览要把「原来是什麼」也显示出来', async () => {
+  const exported = await loadClient('edit-changed')
+  const tree = exported.Pending({
+    state: {
+      kind: 'review',
+      pending: {
+        kind: 'edit',
+        token: 'tok',
+        text: '将改动 1 处配置。确认后写入并重跑插件。',
+        changed: [{ path: 'providers.demo.baseURL', from: 'https://old', to: 'https://new', action: 'set' }],
+      },
+    },
+    actions: {},
+    t: exported.makeT('zh'),
+  })
+  const text = flat(tree)
+
+  assert.ok(text.includes('https://old'), '只显示新值，用户没法判断这是不是他要的那次改动')
+  assert.ok(text.includes('https://new'))
+  assert.ok(text.includes('providers.demo.baseURL'))
+})
+
+test('值显示成输入框里的文本：数组与对象用紧凑 JSON', async () => {
+  const exported = await loadClient('edit-format')
+  assert.equal(exported.formatFieldValue(['a', 'b']), '["a","b"]')
+  assert.equal(exported.formatFieldValue(null), '')
+  assert.equal(exported.formatFieldValue(42), '42')
+  assert.equal(exported.formatChange(undefined), '（空）')
 })

@@ -31,6 +31,7 @@ import {
   summarizeCompat,
 } from './compat.js'
 import { exportForReview } from './export.js'
+import { flattenConfig, applyEdits, diffConfig, buildEdits } from './edit.js'
 import { timestamp } from './backup.js'
 import { assertBackend } from './backends/index.js'
 import {
@@ -338,6 +339,25 @@ export function createSyncService(config) {
       // 采集失败也只是少一份名单，不该让推送整体失败。
       return null
     }
+  }
+
+    /**
+   * 可编辑的公共条目有哪些。
+   *
+   * 只列公共线上的、且本机真的存在的那几条：编辑本机项没有意义
+   * （它们本来就不参与同步），编辑一条本机没有的条目则是「新增」，
+   * 那是另一件事，不该混在这个入口里。
+   *
+   * @returns {{id: string, name?: string, fields: object[]}[]}
+   */
+  function listEditableEntries() {
+    const rows = readLocalRows()
+    const split = splitByTopLevelId(rows)
+    return split.shared.map(row => ({
+      id: row.id,
+      name: row.name,
+      fields: flattenConfig(row.config ?? {}),
+    }))
   }
 
   /**
@@ -998,6 +1018,113 @@ async function crossCheck() {
     },
 
     /**
+     * 配置编辑：算出改完之后的条目。**只读，绝不改本机文件。**
+     *
+     * @param {{id?: string, edits?: object[],
+     *   set?: Record<string, string>, unset?: string[], types?: Record<string, string>}} input
+     * @returns {Promise<object>}
+     */
+    async prepareEdit(input = {}) {
+      const rows = readLocalRows()
+      const shared = splitByTopLevelId(rows).shared
+      if (shared.length === 0) {
+        const error = new Error(
+          'profile 里还没有可编辑的公共配置条目。先推送一次，或者检查这份 profile 的 cordis.patch.yml。',
+        )
+        error.code = 'no-editable-entry'
+        throw error
+      }
+
+      const id = input.id ?? shared[0].id
+      const entry = shared.find(row => row.id === id)
+      if (entry === undefined) {
+        const error = new Error(
+          `profile 里没有「${id}」这一条。当前可编辑的是：${shared.map(r => r.id).join('、')}。`,
+        )
+        error.code = 'entry-not-found'
+        error.available = shared.map(row => row.id)
+        throw error
+      }
+
+      // set/unset 的文本形式由命令行与界面给出，这里统一按字段原类型解析。
+      let edits = input.edits
+      if (edits === undefined) {
+        const types = {}
+        for (const field of flattenConfig(entry.config ?? {})) types[field.path] = field.type
+        const built = buildEdits({
+          set: input.set ?? {},
+          unset: input.unset ?? [],
+          types: { ...types, ...(input.types ?? {}) },
+        })
+        if (!built.ok) {
+          const error = new Error(built.errors.map(e => `${e.path}：${e.error}`).join('\n'))
+          error.code = 'edit-invalid'
+          error.errors = built.errors
+          throw error
+        }
+        edits = built.edits
+      }
+
+      const applied = applyEdits(entry, edits)
+      if (!applied.ok) {
+        const error = new Error(applied.errors.map(e => `${e.path}：${e.error}`).join('\n'))
+        error.code = 'edit-invalid'
+        error.errors = applied.errors
+        throw error
+      }
+
+      const before = entry.config ?? {}
+      const after = applied.entry.config ?? {}
+
+      return {
+        id,
+        name: entry.name,
+        before,
+        after,
+        fields: flattenConfig(before),
+        changed: diffConfig(before, after),
+        rows: [applied.entry],
+        patchFile: patchFile(),
+      }
+    },
+
+    /**
+     * 配置编辑：写回本机。与同步走同一条路径——备份、合并、写后回读。
+     *
+     * @param {object} plan - prepareEdit 的结果
+     * @param {{backupRoot?: string}} [options]
+     * @returns {Promise<object>}
+     */
+    async applyEdit(plan, options = {}) {
+      const result = applyPatchFile({
+        targetFile: patchFile(),
+        sharedRows: plan.rows,
+        backupRoot: options.backupRoot,
+      })
+      const check = verifyWriteBack(patchFile(), plan.rows)
+
+      // 写后回读：C2 的落地。警告非空即视为没写成功，不报一句「已保存」了事。
+      const warnings = [...result.warnings, ...check.missing, ...check.mismatch]
+      if (!result.ok || !check.ok) {
+        const error = new Error(
+          `配置没有写成功：${warnings.join('；')}\n`
+          + '多半是这一条在别处也被声明了（例如 profile 的 cordis.patch.yml 或启动参数），写入会被它覆盖。',
+        )
+        error.code = 'write-failed'
+        error.warnings = warnings
+        throw error
+      }
+
+      return {
+        id: plan.id,
+        applied: result.applied,
+        changed: plan.changed,
+        backupPath: result.backup?.backupPath ?? '',
+        warnings,
+      }
+    },
+
+    /**
      * 默认去哪个目录找导出包。
      *
      * 和 defaultExportRoot 同理：目录归服务层定，界面只需要用。
@@ -1012,5 +1139,11 @@ async function crossCheck() {
      * @returns {object}
      */
     describeImportSource,
+
+    /**
+     * 列出可编辑的公共条目（设置页的编辑区用它）。
+     * @returns {{id: string, name?: string, fields: object[]}[]}
+     */
+    listEditableEntries,
   }
 }

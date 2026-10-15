@@ -50,6 +50,8 @@
     "pullPrepare": "正在算云端差异…",
     "importPrepare": "正在核对导入包…",
     "importConfirm": "正在写回本机…",
+    "editPrepare": "正在核对改了什么…",
+    "editConfirm": "正在写回配置…",
     "pushConfirm": "正在推送…",
     "pullConfirm": "正在应用…"
   },
@@ -62,6 +64,7 @@
     "confirmPush": "确认推送",
     "confirmPull": "确认拉取",
     "confirmImport": "确认导入",
+    "confirmEdit": "确认改动",
     "cancel": "取消",
     "copy": "复制路径",
     "copied": "已复制"
@@ -69,10 +72,18 @@
   "pending": {
     "push": "将推送 {files} 个文件，其中 {n} 项与云端不同。确认后写入云端。",
     "pull": "云端有 {remote} 条配置，其中 {n} 项与本机不同。确认后改动本机。",
-    "import": "将写回 {n} 项，本机原有的监听地址、主题等不受影响。确认后改动本机。"
+    "import": "将写回 {n} 项，本机原有的监听地址、主题等不受影响。确认后改动本机。",
+    "edit": "将改动 {n} 处配置。确认后写入并重跑插件。"
   },
   "compat": {
     "blocked": "上面这些必须先处理：直接写下去不会报错，但也不会生效。"
+  },
+  "edit": {
+    "title": "可移植的配置",
+    "intro": "这些是会跟着走的配置（{name}）。改完点保存，会先给你看改了哪几项。",
+    "save": "保存修改",
+    "removed": "（删除这一项）",
+    "noop": "跟原来一样，没有需要改的。"
   },
   "overview": {
     "title": "这次同步了什么"

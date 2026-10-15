@@ -61,6 +61,9 @@ function fakeService(overrides = {}) {
       calls.applyPull += 1
       return { applied: [{ name: 'x' }], skipped: [], backupPath: '/tmp/bk' }
     },
+    listEditableEntries: () => [],
+    prepareEdit: async () => ({ id: 'llm-pi-ai', fields: [], changed: [], rows: [] }),
+    applyEdit: async () => ({ id: 'llm-pi-ai', changed: [], backupPath: '' }),
     defaultImportRoot: () => '/tmp/import',
     describeImportSource: () => ({
       dir: '/tmp/import', resolved: null, available: false,
@@ -296,17 +299,18 @@ test('内部异常回一句可显示的话，不带堆栈与绝对路径', async
   assert.ok(!/\bat\s+\w+.*:\d+:\d+/.test(body.error), '不得把堆栈回给界面')
 })
 
-test('describeRoutes 给出五条路由，方法与路径齐全', () => {
+test('describeRoutes 给出六条路由，方法与路径齐全', () => {
   const routes = describeRoutes(deps())
   assert.deepEqual(
     routes.map(r => r.path),
-    [ROUTES.status, ROUTES.export, ROUTES.import, ROUTES.push, ROUTES.pull],
+    [ROUTES.status, ROUTES.export, ROUTES.import, ROUTES.push, ROUTES.pull, ROUTES.edit],
   )
   assert.deepEqual(routes[0].methods, ['GET'])
   assert.deepEqual(routes[1].methods, ['POST'])
   assert.deepEqual(routes[2].methods, ['POST'])
   assert.deepEqual(routes[3].methods, ['POST'])
   assert.deepEqual(routes[4].methods, ['POST'])
+  assert.deepEqual(routes[5].methods, ['POST'])
   for (const r of routes) {
     assert.equal(typeof r.fetch, 'function')
     assert.equal(r.requestBody, 'buffered')
@@ -567,4 +571,51 @@ test('导入预览同样带出兼容性检查，且与拉取是同一份口径',
   const payload = await res.json()
 
   assert.deepEqual(payload.compat, compat)
+})
+
+test('编辑预览给的是「改了哪几项」，且确认前一个字节都不写', async () => {
+  let applied = 0
+  const d = deps({
+    prepareEdit: async () => ({
+      id: 'llm-pi-ai',
+      fields: [{ path: 'providers.demo.baseURL', value: 'https://old', type: 'string' }],
+      changed: [{ path: 'providers.demo.baseURL', from: 'https://old', to: 'https://new', action: 'set' }],
+      rows: [],
+    }),
+    applyEdit: async () => { applied += 1; return { id: 'llm-pi-ai', changed: [], backupPath: '/b' } },
+  })
+  const handlers = createRouteHandlers(d)
+
+  const res = await handlers.fetch(post(ROUTES.edit, {
+    step: 'prepare',
+    id: 'llm-pi-ai',
+    set: { 'providers.demo.baseURL': 'https://new' },
+  }))
+  const payload = await res.json()
+
+  assert.equal(payload.changed[0].to, 'https://new')
+  assert.equal(payload.noop, false)
+  assert.equal(applied, 0, '预览阶段绝不能写盘')
+})
+
+test('编辑没有实际变化时如实说明 —— 不能假报一次成功', async () => {
+  const d = deps({ prepareEdit: async () => ({ id: 'llm-pi-ai', fields: [], changed: [], rows: [] }) })
+  const handlers = createRouteHandlers(d)
+
+  const res = await handlers.fetch(post(ROUTES.edit, { step: 'prepare', id: 'llm-pi-ai' }))
+  assert.equal((await res.json()).noop, true)
+})
+
+test('编辑确认必须带上预览时给的 token', async () => {
+  const d = deps()
+  const handlers = createRouteHandlers(d)
+
+  const res = await handlers.fetch(post(ROUTES.edit, { step: 'confirm', token: 'bogus' }))
+  assert.equal(res.status, 409)
+})
+
+test('编辑路由只接受 POST', async () => {
+  const d = deps()
+  const res = await createRouteHandlers(d).fetch(get(ROUTES.edit))
+  assert.equal(res.status, 405)
 })

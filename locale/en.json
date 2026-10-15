@@ -50,6 +50,8 @@
     "pullPrepare": "Comparing with the cloud…",
     "importPrepare": "Checking the package…",
     "importConfirm": "Writing back to this machine…",
+    "editPrepare": "Checking what changed…",
+    "editConfirm": "Writing the change…",
     "pushConfirm": "Pushing…",
     "pullConfirm": "Applying…"
   },
@@ -62,16 +64,26 @@
     "confirmPush": "Confirm push",
     "confirmPull": "Confirm pull",
     "confirmImport": "Confirm import",
+    "confirmEdit": "Confirm change",
     "cancel": "Cancel",
     "copy": "Copy path",
     "copied": "Copied"
   },
   "pending": {
     "push": "This pushes {files} files, {n} of them differing from the cloud. Confirm to write it.",
-    "pull": "The cloud holds {remote} entries, {n} of them differing from this machine. Confirm to change this machine."
+    "pull": "The cloud holds {remote} entries, {n} of them differing from this machine. Confirm to change this machine.",
+    "import": "This writes {n} items. This machine’s own listen address, theme, and so on are left alone. Confirm to change this machine.",
+    "edit": "This changes {n} settings. Confirm to write them and reload the plugin."
   },
   "compat": {
     "blocked": "Fix the items above first: writing them now would silently do nothing."
+  },
+  "edit": {
+    "title": "Portable settings",
+    "intro": "These are the settings that travel ({name}). Save, and you will see exactly what changed first.",
+    "save": "Save changes",
+    "removed": "(remove this entry)",
+    "noop": "No change from the current settings."
   },
   "overview": {
     "title": "What this sync covered"
