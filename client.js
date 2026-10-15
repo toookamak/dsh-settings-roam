@@ -125,7 +125,7 @@ window.__ModuleLoader__.load({
         },
         status: {
           loading: '正在读取本机配置…',
-          needsConfig: '还没配置云端仓库。在上面填上仓库地址，就能推送了。',
+          needsConfig: '还没配置云端仓库。在下面的「云端仓库」里填上地址，就能推送了。',
           emptyCloud: '云端还没有内容。先在这台机器上导出或推送一次。',
           clean: '已与本机一致。',
           diff: '云端有 {n} 项变化待拉取。',
@@ -174,9 +174,14 @@ window.__ModuleLoader__.load({
           removed: '（删除这一项）',
           noop: '跟原来一样，没有需要改的。',
         },
+        preview: {
+          title: '预览',
+          empty: '还没有内容。点下面的「导出到文件」，先看看会带走什么。',
+        },
+        actions: { title: '操作' },
         overview: { title: '这次同步了什么' },
         skips: { title: '这些项留在了本机' },
-        result: { done: '操作已完成。' },
+        result: { done: '操作已完成。', exported: '已导出 {total} 项。' },
       },
       en: {
         meta: {
@@ -216,7 +221,7 @@ window.__ModuleLoader__.load({
         },
         status: {
           loading: 'Reading local settings…',
-          needsConfig: 'No cloud repository yet. Fill in the repository URL above to enable pushing.',
+          needsConfig: 'No cloud repository yet. Fill in the repository URL under \u201cCloud repository\u201d below to enable pushing.',
           emptyCloud: 'The cloud is still empty. Export or push once from this machine first.',
           clean: 'In sync with this machine.',
           diff: '{n} changes on the cloud are waiting to be pulled.',
@@ -265,9 +270,14 @@ window.__ModuleLoader__.load({
           removed: '(remove this entry)',
           noop: 'No change from the current settings.',
         },
+        preview: {
+          title: 'Preview',
+          empty: 'Nothing yet. Use \u201cExport to file\u201d below to see what would be taken.',
+        },
+        actions: { title: 'Actions' },
         overview: { title: 'What this sync covered' },
         skips: { title: 'These stayed on this machine' },
-        result: { done: 'Done.' },
+        result: { done: 'Done.', exported: 'Exported {total} items.' },
       },
     }
 
@@ -443,6 +453,11 @@ window.__ModuleLoader__.load({
       '.roam-edit-path{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);margin:0 0 4px}',
       '.roam-changed{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;font-size:12px;line-height:18px}',
       '.roam-changed-path{color:var(--dsw-alias-label-secondary)}',
+      '.roam-overview{display:flex;flex-direction:column;gap:12px}',
+      '.roam-empty{margin:0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-tertiary)}',
+      '.roam-block{display:flex;flex-direction:column;gap:12px}',
+      '.roam-preview .roam-skips{margin-top:4px}',
+      '.roam-actions-card .roam-pending{border:0;background:transparent;padding:0}',
     ].join('')
 
     /**
@@ -827,7 +842,7 @@ window.__ModuleLoader__.load({
       if (!o) return null
       return h(
         'div',
-        { className: 'roam-card roam-overview' },
+        { className: 'roam-overview' },
         h('p', { className: 'roam-card-title' }, o.title ?? t('overview.title')),
         h('div', { className: 'roam-stats' }, (o.stats ?? []).map(s => h(Stat, { key: s.label, item: s }))),
         // 时间与来源：判断「这份是不是我刚才那次」的依据
@@ -916,11 +931,40 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 设置分区本体（纯展示，测试直接调它做断言）。
-     * @param {object} props
+     * 「预览」块：这次会带走什么、不带走什么、落在哪。
+     *
+     * 它排在「操作」块前面，是刻意的：用户点完按钮之后视线还在按钮附近，
+     * 而内容出现在上方一格——先把位置定在按钮的正上方，才不用回头去找。
+     * 这也正是「点了导出像是没返回结果」的成因。
      */
-    function Section({ state, actions, t = makeT('zh') }) {
+    function PreviewBlock({ state, actions, t = makeT('zh') }) {
       const skipped = state?.skipped ?? []
+      const hasOverview = Boolean(state?.overview)
+      return h(
+        'div',
+        { className: 'roam-card roam-preview', id: 'roam-preview' },
+        h('p', { className: 'roam-card-title' }, t('preview.title')),
+        h(Overview, { state, actions, t }),
+        // 还没有任何内容时也要有一条说明，否则这一块是一个没有落款的空壳。
+        hasOverview ? null : h('p', { className: 'roam-empty' }, t('preview.empty')),
+        skipped.length > 0
+          ? h(
+            'div',
+            { className: 'roam-skips' },
+            h('p', { className: 'roam-card-title' }, t('skips.title')),
+            skipped.map(item => h(SkipRow, { key: item.name, item })),
+          )
+          : null,
+      )
+    }
+
+    /**
+     * 「操作」块：能做哪几件事，以及预览之后在这里确认。
+     *
+     * 确认区跟着按钮走，而不是自成一张卡：确认的对象就是这些按钮点出来的，
+     * 分开摆会让「我在确认哪一件事」变得需要靠记忆。
+     */
+    function ActionBlock({ state, actions, t = makeT('zh') }) {
       const loading = state?.kind === 'loading'
       const busy = state?.kind === 'busy'
       const disabled = loading || busy
@@ -929,25 +973,8 @@ window.__ModuleLoader__.load({
       const cloudReady = state?.status?.configured !== false && !disabled
       return h(
         'div',
-        { className: 'roam-section roam' },
-        h(
-          'div',
-          { className: 'roam-head' },
-          h('h2', { className: 'roam-title' }, t('title')),
-          h('p', { className: 'roam-intro' }, t('intro')),
-        ),
-        h(StatusLine, { state, t }),
-        state?.form ? h(ConfigCard, { form: state.form, t, onSaved: actions?.onSaved }) : null,
-        h(EditCard, { entry: state?.editable, t, onEdit: actions?.onEdit }),
-        h(Overview, { state, actions, t }),
-        skipped.length > 0
-          ? h(
-            'div',
-            { className: 'roam-card roam-skips' },
-            h('p', { className: 'roam-card-title' }, t('skips.title')),
-            h('div', { className: 'roam-skips' }, skipped.map(item => h(SkipRow, { key: item.name, item }))),
-          )
-          : null,
+        { className: 'roam-card roam-actions-card' },
+        h('p', { className: 'roam-card-title' }, t('actions.title')),
         h(
           'div',
           { className: 'roam-actions' },
@@ -975,6 +1002,33 @@ window.__ModuleLoader__.load({
           ),
         ),
         h(Pending, { state, actions, t }),
+      )
+    }
+
+    /**
+     * 设置分区本体（纯展示，测试直接调它做断言）。
+     *
+     * 分块的顺序是「先看到什么、再做什么」：
+     * 状态一句话 → 预览（这次会带走什么）→ 操作（按钮与确认）→ 设置。
+     * 「云端仓库」那五个输入框排在最后，因为它们是设一次就不动的；
+     * 顶在前面会把每天要看的预览挤到需要滚动才能看到的位置。
+     * @param {object} props
+     */
+    function Section({ state, actions, t = makeT('zh') }) {
+      return h(
+        'div',
+        { className: 'roam-section roam' },
+        h(
+          'div',
+          { className: 'roam-head' },
+          h('h2', { className: 'roam-title' }, t('title')),
+          h('p', { className: 'roam-intro' }, t('intro')),
+        ),
+        h(StatusLine, { state, t }),
+        h(PreviewBlock, { state, actions, t }),
+        h(ActionBlock, { state, actions, t }),
+        state?.form ? h(ConfigCard, { form: state.form, t, onSaved: actions?.onSaved }) : null,
+        h(EditCard, { entry: state?.editable, t, onEdit: actions?.onEdit }),
       )
     }
 
@@ -1096,6 +1150,22 @@ window.__ModuleLoader__.load({
       React.useEffect(() => { load() }, [load])
 
       /**
+       * 动作完成后把「预览」块拉到视野里。
+       *
+       * 不这么做的话，用户点完按钮视线还在按钮上，而内容出现在上方一格——
+       * 他就只能看到一句状态文字，感觉像「点了没返回结果」。
+       * 没有 document 时（单元测试的假渲染）静默跳过。
+       */
+      const revealPreview = React.useCallback(() => {
+        try {
+          globalThis.document?.getElementById?.('roam-preview')
+            ?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' })
+        } catch {
+          // 拉不动视野不是错误，不该影响这一次操作的结果。
+        }
+      }, [])
+
+      /**
        * 本地导出：一次性、无副作用，不走确认流程。
        *
        * 它只往导出目录写副本，不改本机配置也不碰远端，所以没有需要用户
@@ -1107,14 +1177,18 @@ window.__ModuleLoader__.load({
           const done = await request(ROUTES.export, {})
           setState(current => ({
             kind: 'done',
-            text: t('result.done'),
+            // 状态行直接说清「导出了几项」。只说一句「操作已完成」，
+            // 用户还得自己去下面找导到哪了——那就等于没说。
+            text: done.exported ? t('result.exported', { total: done.exported.total }) : t('result.done'),
             status: current.status,
             overview: done.overview ?? null,
           }))
+          revealPreview()
         } catch (error) {
           setState(current => ({ kind: 'error', message: error.message, status: current.status }))
+          revealPreview()
         }
-      }, [t])
+      }, [t, revealPreview])
 
       /**
        * 统一处理「预览 → 确认」两段。

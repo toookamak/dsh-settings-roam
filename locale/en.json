@@ -36,7 +36,7 @@
   },
   "status": {
     "loading": "Reading local settings…",
-    "needsConfig": "No cloud repository yet. Fill in the repository URL above to enable pushing.",
+    "needsConfig": "No cloud repository yet. Fill in the repository URL under “Cloud repository” below to enable pushing.",
     "emptyCloud": "The cloud is still empty. Export or push once from this machine first.",
     "clean": "In sync with this machine.",
     "diff": "{n} changes on the cloud are waiting to be pulled.",
@@ -85,6 +85,13 @@
     "removed": "(remove this entry)",
     "noop": "No change from the current settings."
   },
+  "preview": {
+    "title": "Preview",
+    "empty": "Nothing yet. Use “Export to file” below to see what would be taken."
+  },
+  "actions": {
+    "title": "Actions"
+  },
   "overview": {
     "title": "What this sync covered"
   },
@@ -92,6 +99,7 @@
     "title": "These stayed on this machine"
   },
   "result": {
-    "done": "Done."
+    "done": "Done.",
+    "exported": "Exported {total} items."
   }
 }

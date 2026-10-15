@@ -223,6 +223,23 @@ function render(el) {
 const isButton = el => el?.type === PRIMITIVES.Button
 const isInput = el => el?.type === PRIMITIVES.Input
 const byClass = (el, className) => (el?.children ?? []).find(c => c?.props?.className === className)
+
+/**
+ * 按类名在整棵树里找。
+ *
+ * 与 byClass 的区别：byClass 只看直接子元素。分块之后按钮落在
+ * 「操作」块里、再外面才是分区根，所以按直接子元素找会找不到——
+ * 那不是界面错了，是找法配不上结构。
+ */
+function findByClass(el, className) {
+  if (el === null || el === undefined || typeof el !== 'object') return undefined
+  if (el.props?.className === className) return el
+  for (const child of el.children ?? []) {
+    const hit = findByClass(child, className)
+    if (hit) return hit
+  }
+  return undefined
+}
 const flat = el => JSON.stringify(el)
 
 /** 造一个 configForms 认得出来的命名空间视图（schema 是 $ref 风格）。 */
@@ -427,12 +444,12 @@ test('界面用宿主提供的组件，而不是裸 HTML 元素', async () => {
     state: { kind: 'clean', status: { configured: true }, form: fakeForm() },
     actions: {},
   }))
-  const configCard = byClass(section, 'roam-card roam-config')
-  const field = byClass(configCard, 'roam-field')
+  const configCard = findByClass(section, 'roam-card roam-config')
+  const field = findByClass(configCard, 'roam-field')
 
-  assert.ok(isInput(byClass(field, 'roam-field-input')), '输入框要用宿主的 Input')
+  assert.ok(isInput(findByClass(field, 'roam-field-input')), '输入框要用宿主的 Input')
   assert.equal(
-    (byClass(section, 'roam-actions').children ?? []).filter(isButton).length,
+    (findByClass(section, 'roam-actions').children ?? []).filter(isButton).length,
     4,
     '四个动作都要用宿主的 Button',
   )
@@ -459,7 +476,7 @@ test('界面组件取不到时降级为可用元素，而不是整节崩掉', as
     state: { kind: 'clean', status: { configured: true } },
     actions: {},
   }))
-  const buttons = (byClass(section, 'roam-actions').children ?? []).filter(c => c?.type === 'button')
+  const buttons = (findByClass(section, 'roam-actions').children ?? []).filter(c => c?.type === 'button')
   assert.equal(buttons.length, 4, '降级后仍要给出四个可点的按钮，只是没有宿主的样式')
 })
 
@@ -527,7 +544,7 @@ test('未配置云端仓库时，只有拉取与推送禁用 —— 导出与导
     state: { kind: 'needs-config', status: { configured: false } },
     actions: {},
   }))
-  const buttons = (byClass(section, 'roam-actions').children ?? []).filter(isButton)
+  const buttons = (findByClass(section, 'roam-actions').children ?? []).filter(isButton)
   // 点下去必然失败的按钮，和「按钮没接上线」在用户眼里是同一件事
   assert.equal(buttons[0].props.disabled, false, '导出不依赖云端，必须可点')
   assert.equal(buttons[1].props.disabled, false, '导入读的是本机目录，不该被云端配置挡住')
@@ -542,8 +559,8 @@ test('加载中与执行中禁用全部动作 —— 不给双击留下第二次
       state: { kind, status: { configured: true } },
       actions: {},
     }))
-    const buttons = (byClass(section, 'roam-actions').children ?? []).filter(isButton)
-    assert.ok(buttons.every(b => b.props.disabled === true), `${kind} 时三个按钮都该禁用`)
+    const buttons = (findByClass(section, 'roam-actions').children ?? []).filter(isButton)
+    assert.ok(buttons.every(b => b.props.disabled === true), `${kind} 时四个按钮都该禁用`)
   }
 })
 
@@ -833,7 +850,7 @@ test('待确认区块给出「确认」与「取消」两个动作', async () =>
   }
 
   const section = render(exported.Section({ state, actions }))
-  const pending = byClass(section, 'roam-card roam-pending')
+  const pending = findByClass(section, 'roam-card roam-pending')
   assert.ok(pending, '有待确认内容时必须渲染出来 —— 确认点得看得见')
 
   const buttons = (byClass(pending, 'roam-pending-actions').children ?? []).filter(isButton)
@@ -908,12 +925,53 @@ test('动作区第一个是「导出到文件」，且每个按钮都真接上�
       onPush: () => clicked.push('push'),
     },
   }))
-  const buttons = (byClass(section, 'roam-actions').children ?? []).filter(isButton)
+  const buttons = (findByClass(section, 'roam-actions').children ?? []).filter(isButton)
 
   assert.equal(buttons[0].children[0], '导出到文件', '第一次打开这一节最该点的是它')
   assert.deepEqual(buttons.map(b => b.children[0]), ['导出到文件', '导入', '拉取', '推送'])
   for (const b of buttons) b.props.onClick()
   assert.deepEqual(clicked, ['export', 'import', 'pull', 'push'])
+})
+
+test('界面分成「预览」与「操作」两块，预览排在操作前面', async () => {
+  const exported = await loadClient('blocks')
+  const section = render(exported.Section({
+    state: { kind: 'clean', status: { configured: true } },
+    actions: {},
+  }))
+  const classes = section.children.map(c => c?.props?.className)
+  const previewAt = classes.indexOf('roam-card roam-preview')
+  const actionsAt = classes.indexOf('roam-card roam-actions-card')
+  assert.ok(previewAt >= 0, '要有「预览」块')
+  assert.ok(actionsAt >= 0, '要有「操作」块')
+  assert.ok(previewAt < actionsAt, '预览要排在操作前面 —— 点完按钮不用回头找结果')
+  // 预览块要能被滚到：revealPreview 按这个 id 找它
+  assert.equal(section.children[previewAt].props.id, 'roam-preview')
+})
+
+test('还没有内容时「预览」块也要有落款 —— 不留一个空壳', async () => {
+  const exported = await loadClient('preview-empty')
+  const section = render(exported.Section({
+    state: { kind: 'needs-config', status: { configured: false } },
+    actions: {},
+  }))
+  const preview = findByClass(section, 'roam-card roam-preview')
+  assert.equal(byClass(preview, 'roam-card-title').children[0], '预览')
+  const empty = byClass(preview, 'roam-empty')
+  assert.ok(empty, '没有内容时要有一句说明，而不是空着')
+  assert.ok(empty.children[0].includes('导出到文件'), '要指明下一步点哪里')
+})
+
+test('设置项排在预览与操作之后 —— 每天要看的不该被五个输入框挤下去', async () => {
+  const exported = await loadClient('order')
+  const section = render(exported.Section({
+    state: { kind: 'clean', status: { configured: true }, form: fakeForm() },
+    actions: {},
+  }))
+  const classes = section.children.map(c => c?.props?.className ?? '')
+  const actionsAt = classes.indexOf('roam-card roam-actions-card')
+  const configAt = classes.indexOf('roam-card roam-config')
+  assert.ok(configAt > actionsAt, '云端仓库的输入框要排在操作块后面')
 })
 
 test('导出不经过确认流程 —— 无副作用的本地动作不该多点两次', async () => {
