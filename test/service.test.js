@@ -721,3 +721,100 @@ test('拉取不会删掉本机独有的技能', async () => {
     )
   }
 })
+
+test('拉取准备会带出兼容性检查 —— 恢复前先知道哪些项不会生效', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const backend = fakeBackend({
+    'config/profile.patch.yml': [
+      '- id: llm-pi-ai',
+      '  name: "@deepseek-ai/dsh-llm-pi-ai"',
+      '  config:',
+      '    providers:',
+      '      demo:',
+      '        apiKeyEnv: DEMO_KEY',
+      '',
+    ].join('\n'),
+    'config/bundles.json': JSON.stringify({ official: [], thirdParty: ['dshmarket'] }),
+  })
+  const service = createSyncService({
+    backend, workDir, dshRoot, skillsRoot,
+    pluginManager: { async listBundles() { return [] } },
+  })
+
+  const plan = await service.preparePull()
+
+  assert.ok(plan.compat, '拉取准备必须带出兼容性检查结果')
+  assert.equal(plan.compat.blocked, false, '插件没装只是提醒，不该拦住整次拉取')
+  const missing = plan.compat.items.find(i => i.code === 'plugin-missing')
+  assert.ok(missing, '插件名单里有而本机没装的，应被单独列出来')
+  assert.equal(missing.level, 'warn')
+  rmSync(root, { recursive: true })
+})
+
+test('兼容性检查里有拦下的项时，拉取会拒绝写入而不是默默跳过', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const backend = fakeBackend({
+    // name 与本机那条 llm-pi-ai 不一致：loader 会静默跳过，写了等于没写。
+    'config/profile.patch.yml': [
+      '- id: llm-pi-ai',
+      '  name: "@deepseek-ai/dsh-llm-pi-ai-renamed"',
+      '  config:',
+      '    providers: {}',
+      '',
+    ].join('\n'),
+  })
+  const service = createSyncService({ backend, workDir, dshRoot, skillsRoot })
+
+  const plan = await service.preparePull()
+  assert.equal(plan.compat.blocked, true)
+
+  await assert.rejects(
+    () => service.applyPull(plan, { backupRoot: join(root, 'backup') }),
+    err => {
+      assert.equal(err.code, 'compat-blocked')
+      assert.match(err.message, /llm-pi-ai/)
+      assert.match(err.message, /不会生效/)
+      return true
+    },
+  )
+  rmSync(root, { recursive: true })
+})
+
+test('导入包里的插件本机没装时，检查给出提醒但不拦写入', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({
+    backend: fakeBackend(), workDir, dshRoot, skillsRoot,
+    pluginManager: { async listBundles() { return [] } },
+  })
+
+  // 造一个含第三方插件的导出包。
+  const packageDir = join(root, 'pkg')
+  mkdirSync(join(packageDir, 'config'), { recursive: true })
+  writeFileSync(join(packageDir, 'config', 'profile.patch.yml'), [
+    '- id: llm-pi-ai',
+    '  name: "@deepseek-ai/dsh-llm-pi-ai"',
+    '  config:',
+    '    providers: {}',
+    '',
+  ].join('\n'))
+  writeFileSync(join(packageDir, 'config', 'bundles.json'), JSON.stringify({ official: [], thirdParty: ['dshmarket'] }))
+  const { hashContent } = await import('../src/export.js')
+  const patchContent = readFileSync(join(packageDir, 'config', 'profile.patch.yml'), 'utf8')
+  const bundlesContent = readFileSync(join(packageDir, 'config', 'bundles.json'), 'utf8')
+  writeFileSync(join(packageDir, 'manifest.json'), JSON.stringify({
+    schemaVersion: 1,
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    generatedBy: 'other-machine',
+    total: 2,
+    files: [
+      { path: 'config/profile.patch.yml', bytes: Buffer.byteLength(patchContent), sha256: hashContent(patchContent) },
+      { path: 'config/bundles.json', bytes: Buffer.byteLength(bundlesContent), sha256: hashContent(bundlesContent) },
+    ],
+  }))
+
+  const plan = await service.prepareImport({ packageDir })
+  assert.ok(plan.compat, '导入准备也要带出同一份检查')
+  assert.equal(plan.compat.blocked, false)
+  assert.ok(plan.compat.items.some(i => i.code === 'plugin-missing'))
+  rmSync(root, { recursive: true })
+})

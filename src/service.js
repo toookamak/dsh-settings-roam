@@ -23,6 +23,13 @@ import { diffSnapshots, summarizeDiff } from './diff.js'
 import { applyPatchFile, verifyWriteBack } from './apply.js'
 import { scanSkills, listSkillNames, crossCheckSkills, applySkillFiles } from './skills.js'
 import { collectBundles } from './bundles.js'
+import {
+  checkPatchEntries,
+  checkPlugins,
+  checkEnvRefs,
+  checkSkills,
+  summarizeCompat,
+} from './compat.js'
 import { exportForReview } from './export.js'
 import { timestamp } from './backup.js'
 import { assertBackend } from './backends/index.js'
@@ -334,6 +341,38 @@ export function createSyncService(config) {
   }
 
   /**
+   * 恢复前的兼容性检查。
+   *
+   * 为什么单独抽成一层：拉取与导入都要用，而且两者的判断口径必须一致——
+   * 「同一个包，从云端拉和从本地包导入，结论不一样」会让用户没法信任这个检查。
+   *
+   * @param {{remoteRows?: object[], remoteSkillFiles?: object[],
+   *   bundleNames?: object|null, installed?: object|null}} input
+   * @returns {Promise<object>} summarizeCompat 的结果
+   */
+  async function runCompat(input = {}) {
+    const rows = input.remoteRows ?? []
+    const skillFiles = input.remoteSkillFiles ?? []
+    const localRows = readLocalRows()
+
+    // input.bundleNames 是「要写回的名单」（云端或导入包里的），
+    // installed 是「本机现在装了什么」。两者不能混。
+    // undefined 表示「去问本机」，null 表示「问不到，别猜」——
+    // 把「问不到」当成「本机一个插件都没有」会误报一片缺失。
+    const installed = input.installed !== undefined
+      ? input.installed
+      : await collectPluginNames()
+
+    const items = [
+      ...checkPatchEntries(rows, localRows),
+      ...checkPlugins(input.bundleNames ?? null, installed),
+      ...checkEnvRefs(collectApiKeyRefs(rows), process.env),
+      ...checkSkills(skillFiles, path => existsSync(skillTargetPath(skillsRoot, path))),
+    ]
+    return summarizeCompat(items)
+  }
+
+  /**
    * 直读结果与服务视图交叉校验。
    *
    * 不一致本身不是故障：它说明有技能来自非本机的 provider 来源。
@@ -342,7 +381,7 @@ export function createSyncService(config) {
    *
    * @returns {Promise<{checked: boolean, consistent: boolean, complete: boolean, onlyDirect: string[], onlyService: string[]}>}
    */
-  async function crossCheck() {
+async function crossCheck() {
     const directNames = listSkillNames(skillsRoot)
     if (skillService === null) {
       // 没接校验通道时如实说明「没验」，不假装验过了。
@@ -536,6 +575,7 @@ export function createSyncService(config) {
       return { pushed: plan.files.map(f => f.path) }
     },
 
+
     /**
      * 拉取准备：算出云端与本机的差异。**只读，绝不改本机文件。**
      * @returns {Promise<{diff: object[], summary: object, remoteRows: object[]}>}
@@ -592,6 +632,24 @@ export function createSyncService(config) {
       // 服务视图里有什么。只读，不改任何地方。
       const skillCheck = await crossCheck()
 
+      // 云端记着上次推送时的插件名单，拿它做恢复前检查：
+      // 名单里有而本机没装的插件，配置会照常写回但要等插件装上才有用。
+      const bundlesText = await backend.readFile(CLOUD_PATHS.bundles)
+      let cloudBundles = null
+      if (bundlesText !== null && bundlesText !== '') {
+        try {
+          cloudBundles = JSON.parse(bundlesText)
+        } catch {
+          cloudBundles = null
+        }
+      }
+
+      const compat = await runCompat({
+        remoteRows,
+        remoteSkillFiles,
+        bundleNames: cloudBundles,
+      })
+
       return {
         diff,
         summary: summarizeDiff(diff),
@@ -599,6 +657,7 @@ export function createSyncService(config) {
         remotePatchText: patchText,
         remoteSkillFiles,
         skillCheck,
+        compat,
       }
     },
 
@@ -611,6 +670,19 @@ export function createSyncService(config) {
      * @returns {Promise<object>} RestoreReport
      */
     async applyPull(plan, options) {
+      // 兼容性检查里只要有一条 block 级别的问题，就停下来。
+      //
+      // 这类问题的共同特征是「写下去不报错，只是不生效、或者覆盖掉别的东西」——
+      // 让用户先处理掉再写，比等他日后从「配置看着有、行为不对」倒查要省得多。
+      // warn 级别的一律放行：提醒不该变成路障。
+      if (plan?.compat?.blocked) {
+        const blocking = plan.compat.items.filter(entry => entry.level === 'block')
+        const error = new Error(blocking.map(entry => `${entry.name}：${entry.message}\n${entry.action}`).join('\n\n'))
+        error.code = 'compat-blocked'
+        error.items = blocking
+        throw error
+      }
+
       const applied = []
       const skipped = []
       // 报告要给用户「回退到这里」的路径，因此必须是真正装着副本的那一层目录，
@@ -751,12 +823,19 @@ export function createSyncService(config) {
         skillCheck = null
       }
 
+      const compat = await runCompat({
+        remoteRows: plan.patchRows,
+        remoteSkillFiles: plan.skillFiles,
+        bundleNames: plan.pluginNames,
+      })
+
       return {
         ...plan,
         refused: [...plan.refused, ...keptLocal],
         warnings: check.warnings ?? [],
         diff,
         summary: summarizeDiff(diff),
+        compat,
         skillCheck,
         skillsRoot,
         patchFile: patchFile(),
@@ -777,6 +856,18 @@ export function createSyncService(config) {
      * @returns {Promise<object>} RestoreReport
      */
     async applyImport(plan, options = {}) {
+      // 兼容性检查里只要有一条 block 级别的问题，就停下来。
+      //
+      // 这类问题的共同特征是「写下去不报错，只是不生效、或者覆盖掉别的东西」——
+      // 让用户先处理掉再写，比等他日后从「配置看着有、行为不对」倒查要省得多。
+      // warn 级别的一律放行：提醒不该变成路障。
+      if (plan?.compat?.blocked) {
+        const blocking = plan.compat.items.filter(entry => entry.level === 'block')
+        const error = new Error(blocking.map(entry => `${entry.name}：${entry.message}\n${entry.action}`).join('\n\n'))
+        error.code = 'compat-blocked'
+        error.items = blocking
+        throw error
+      }
       const applied = []
       const skipped = []
       const backups = []
