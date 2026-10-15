@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSyncService } from '../src/service.js'
@@ -133,6 +133,13 @@ test('applyPull 应用配置并出报告，本机值零损伤', async () => {
   assert.equal(after.find(r => r.id === 'webserver').config.host, '10.0.0.9', '本机值不得被改')
   assert.ok(after.find(r => r.id === 'llm-pi-ai').config.providers.x, '公共条目应已应用')
   assert.ok(report.backupPath, '报告应含备份位置')
+  // 端到端演练发现的缺陷：报告曾把备份根目录当成备份位置返回，
+  // 用户照着这个路径找不到副本。它必须是真正装着副本的那一层。
+  assert.notEqual(report.backupPath, join(root, 'backup'), '不能返回备份根目录而非备份本身')
+  assert.ok(
+    existsSync(join(report.backupPath, join(dshRoot, 'cordis.patch.yml'))),
+    '报告给出的备份路径里应当真的找得到副本',
+  )
   rmSync(root, { recursive: true })
 })
 

@@ -256,6 +256,9 @@ export function createSyncService(config) {
     async applyPull(plan, options) {
       const applied = []
       const skipped = []
+      // 报告要给用户「回退到这里」的路径，因此必须是真正装着副本的那一层目录，
+      // 而不是它的父目录。空字符串表示本次没有备份（例如新机器首次拉取）。
+      let backup = null
 
       if (plan.remoteRows.length > 0) {
         const result = applyPatchFile({
@@ -263,6 +266,7 @@ export function createSyncService(config) {
           sharedRows: plan.remoteRows,
           backupRoot: options?.backupRoot,
         })
+        backup = result.backup
 
         // 写后回读校验：C2 的落地。警告非空即视为失败，不静默放过。
         const check = verifyWriteBack(patchFile, plan.remoteRows)
@@ -282,7 +286,8 @@ export function createSyncService(config) {
         skipped,
         needsRestart: applied.length > 0,
         needsCredentials: collectApiKeyRefs(plan.remoteRows),
-        backupPath: options?.backupRoot ?? '',
+        backupPath: backup?.backupPath ?? '',
+        backupFiles: backup?.backedUp ?? [],
       }
     },
 
