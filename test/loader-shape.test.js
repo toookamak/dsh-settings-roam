@@ -923,3 +923,89 @@ test('导出不经过确认流程 —— 无副作用的本地动作不该多点
   assert.ok(!body.includes('pending'), '导出不产生待确认状态')
   assert.ok(!body.includes('step:'), '导出没有 prepare/confirm 两段')
 })
+
+// ─── 兼容性检查的呈现 ────────────────────────────────────────────────
+
+test('检查结果里「不需要做什么」的项不摆出来 —— 否则真正要注意的会被淹掉', async () => {
+  const exported = await loadClient('compat-filter')
+  const notable = exported.compatNotable({
+    blocked: false,
+    counts: { ok: 3, warn: 1, block: 1 },
+    items: [
+      { level: 'ok', name: 'a', code: 'entry-update' },
+      { level: 'warn', name: 'b', code: 'plugin-missing' },
+      { level: 'block', name: 'c', code: 'name-mismatch' },
+    ],
+  })
+  assert.deepEqual(notable.map(i => i.name), ['b', 'c'])
+})
+
+test('检查结果缺失时不崩 —— 老版本服务不返回这个字段', async () => {
+  const exported = await loadClient('compat-missing')
+  assert.deepEqual(exported.compatNotable(null), [])
+  assert.deepEqual(exported.compatNotable({}), [])
+  assert.deepEqual(exported.compatNotable({ items: 'nope' }), [])
+})
+
+test('预览里逐条摆出需要注意的项，连「下一步怎么办」一起给', async () => {
+  const exported = await loadClient('compat-pending')
+  const state = {
+    kind: 'review',
+    pending: {
+      kind: 'pull',
+      token: 'tok',
+      text: '云端有 1 条配置，其中 1 项与本机不同。确认后改动本机。',
+      confirmLabel: '确认拉取',
+      compat: {
+        blocked: false,
+        counts: { ok: 0, warn: 1, block: 0 },
+        items: [{
+          level: 'warn', name: 'dshmarket', code: 'plugin-missing',
+          message: '插件「dshmarket」本机没有装。', action: '先按你原来的方式装上，再重启 DSH。',
+        }],
+      },
+    },
+  }
+  const tree = exported.Pending({ state, actions: {}, t: key => key })
+  const text = flat(tree)
+
+  assert.ok(text.includes('本机没有装'), '应当摆出这条提醒')
+  assert.ok(text.includes('再重启 DSH'), '只说问题不说怎么办，用户还是不知道下一步')
+
+  // 确认按钮仍然是可点的：提醒不该变成路障。
+  const actionsRow = byClass(tree, 'roam-pending-actions')
+  const confirm = actionsRow.children.find(isButton)
+  assert.notEqual(confirm.props.disabled, true, '只有 warn 时不该禁用确认')
+})
+
+test('有拦下的项时不给可点的确认 —— 这类项点下去不报错也不生效', async () => {
+  const exported = await loadClient('compat-blocked')
+  const state = {
+    kind: 'review',
+    pending: {
+      kind: 'pull',
+      token: 'tok',
+      text: '预览',
+      compat: {
+        blocked: true,
+        counts: { ok: 0, warn: 0, block: 1 },
+        items: [{
+          level: 'block', name: 'llm-pi-ai', code: 'name-mismatch',
+          message: '「llm-pi-ai」本机指向的是别的包。', action: '先确认要保留哪一个。',
+        }],
+      },
+    },
+  }
+  // 用真的语言包，顺带验证 compat.blocked 这个键确实存在（写错键会露出键名）。
+  const tree = exported.Pending({ state, actions: {}, t: exported.makeT('zh') })
+  const actionsRow = byClass(tree, 'roam-pending-actions')
+  const confirm = actionsRow.children.find(isButton)
+
+  assert.equal(confirm.props.disabled, true, '有拦下的项时确认必须是禁用的')
+  assert.ok(!flat(tree).includes('compat.blocked'), '语言包里应当真有这个键')
+  assert.ok(flat(tree).includes('不会生效'), '还要说清为什么不让点')
+
+  // 取消仍然可点：用户总得能退出去。
+  const cancel = actionsRow.children.filter(isButton)[1]
+  assert.notEqual(cancel.props.disabled, true)
+})

@@ -313,3 +313,54 @@ test('push 与 pull 在 help 里都写了「不加 --yes 只算不写」', () =>
   assert.match(result.stdout, /pull +从云端拉回本机/)
   assert.match(result.stdout, /不加时只打印计划/)
 })
+
+test('真跑 CLI：import 会先报出兼容性检查，插件没装只是提醒', () => {
+  const { root, dshRoot } = sandbox()
+  const outDir = join(root, 'out')
+  execFileSync(process.execPath, [BIN, '--dsh-home', dshRoot, 'export', outDir], { encoding: 'utf8' })
+
+  const target = targetMachine(root)
+  const result = spawnSync(
+    process.execPath,
+    [BIN, '--dsh-home', target.dshRoot, 'import', outDir],
+    { encoding: 'utf8' },
+  )
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /兼容性检查/)
+  assert.match(result.stdout, /本机还没有任何改动/)
+  rmSync(root, { recursive: true })
+})
+
+test('真跑 CLI：兼容性检查里有拦下的项时，不加 --yes 也给出非零退出码', () => {
+  const { root, dshRoot } = sandbox()
+  const outDir = join(root, 'out')
+  execFileSync(process.execPath, [BIN, '--dsh-home', dshRoot, 'export', outDir], { encoding: 'utf8' })
+
+  const target = targetMachine(root)
+  // 目标机上 llm-pi-ai 那条指向别的包。实测约束：loader 遇到 name 不一致时
+  // 只记一条日志就跳过，写下去不报错也不生效——所以必须在写之前停下来。
+  writeFileSync(target.patchFile, [
+    '- id: llm-pi-ai',
+    '  name: "@deepseek-ai/dsh-llm-something-else"',
+    '  config:',
+    '    providers: {}',
+    '- id: webserver',
+    '  config:',
+    "    host: '127.0.0.1'",
+    '',
+  ].join('\n'))
+
+  const before = readFileSync(target.patchFile, 'utf8')
+  const result = spawnSync(
+    process.execPath,
+    [BIN, '--dsh-home', target.dshRoot, 'import', outDir],
+    { encoding: 'utf8' },
+  )
+
+  assert.equal(result.status, 1, '有拦下的项时不该报成功')
+  assert.match(result.stdout, /停 /)
+  assert.match(result.stdout, /不会生效/)
+  assert.equal(readFileSync(target.patchFile, 'utf8'), before, '拦下时本机一个字节都不该动')
+  rmSync(root, { recursive: true })
+})

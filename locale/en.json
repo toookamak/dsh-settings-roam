@@ -70,6 +70,9 @@
     "push": "This pushes {files} files, {n} of them differing from the cloud. Confirm to write it.",
     "pull": "The cloud holds {remote} entries, {n} of them differing from this machine. Confirm to change this machine."
   },
+  "compat": {
+    "blocked": "Fix the items above first: writing them now would silently do nothing."
+  },
   "overview": {
     "title": "What this sync covered"
   },

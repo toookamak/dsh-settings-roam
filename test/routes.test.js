@@ -524,3 +524,47 @@ test('导入包不可用时回可显示的话，且不留下待确认状态', as
   assert.equal(res.status, 500)
   assert.match((await res.json()).error, /没有导出包/)
 })
+
+test('拉取预览会带出兼容性检查，供界面决定能不能放行', async () => {
+  const d = deps({
+    preparePull: async () => ({
+      summary: { add: 1, modify: 0, delete: 0 },
+      diff: [],
+      remoteRows: [{ id: 'llm-pi-ai', name: 'pkg' }],
+      remoteSkillFiles: [],
+      skillCheck: null,
+      compat: {
+        blocked: true,
+        counts: { ok: 0, warn: 0, block: 1 },
+        items: [{ level: 'block', code: 'name-mismatch', name: 'llm-pi-ai', message: 'm', action: 'a' }],
+      },
+    }),
+  })
+  const handlers = createRouteHandlers(d)
+
+  const res = await handlers.pull(post('', { step: 'prepare' }))
+  const payload = await res.json()
+
+  assert.equal(payload.compat.blocked, true)
+  assert.equal(payload.compat.items[0].code, 'name-mismatch')
+})
+
+test('导入预览同样带出兼容性检查，且与拉取是同一份口径', async () => {
+  const compat = { blocked: false, counts: { ok: 1, warn: 1, block: 0 }, items: [] }
+  const d = deps({
+    prepareImport: async () => ({
+      packageDir: '/tmp/pkg',
+      patchRows: [],
+      skillFiles: [],
+      refused: [],
+      empty: false,
+      compat,
+    }),
+  })
+  const handlers = createRouteHandlers(d)
+
+  const res = await handlers.importFrom(post('', { step: 'prepare', packageDir: '/tmp/pkg' }))
+  const payload = await res.json()
+
+  assert.deepEqual(payload.compat, compat)
+})

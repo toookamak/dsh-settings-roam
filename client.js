@@ -160,6 +160,9 @@ window.__ModuleLoader__.load({
           pull: '云端有 {remote} 条配置，其中 {n} 项与本机不同。确认后改动本机。',
           import: '将写回 {n} 项，本机原有的监听地址、主题等不受影响。确认后改动本机。',
         },
+        compat: {
+          blocked: '上面这些必须先处理：直接写下去不会报错，但也不会生效。',
+        },
         overview: { title: '这次同步了什么' },
         skips: { title: '这些项留在了本机' },
         result: { done: '操作已完成。' },
@@ -236,6 +239,9 @@ window.__ModuleLoader__.load({
           push: 'This pushes {files} files, {n} of them differing from the cloud. Confirm to write it.',
           pull: 'The cloud holds {remote} entries, {n} of them differing from this machine. Confirm to change this machine.',
         },
+        compat: {
+          blocked: 'Fix the items above first: writing them now would silently do nothing.',
+        },
         overview: { title: 'What this sync covered' },
         skips: { title: 'These stayed on this machine' },
         result: { done: 'Done.' },
@@ -294,6 +300,17 @@ window.__ModuleLoader__.load({
      * @param {Array<object>|undefined} items
      * @returns {Array<{name: string, explanation: string}>}
      */
+    /**
+     * 从检查结果里挑出需要注意的项。
+     *
+     * ok 的那些是「不需要做什么」，逐条摆出来只会把真正要注意的几条淹掉。
+     * 单列成纯函数是为了能直接断言，不必展开整棵渲染树。
+     */
+    function compatNotable(compat) {
+      if (!compat || !Array.isArray(compat.items)) return []
+      return compat.items.filter(entry => entry?.level !== 'ok')
+    }
+
     function normalizeRefused(items) {
       if (!Array.isArray(items)) return []
       return items.map(item => ({
@@ -363,6 +380,12 @@ window.__ModuleLoader__.load({
       '.roam-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
       '.roam-pending-text{margin:0;font-size:13px;line-height:20px}',
       '.roam-pending-actions{display:flex;gap:8px}',
+      '.roam-compat{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}',
+      '.roam-compat-item{font-size:12px;line-height:18px}',
+      '.roam-compat-message{margin:0;color:var(--dsw-alias-label-secondary)}',
+      '.roam-compat-block .roam-compat-message{color:var(--dsw-alias-state-error-primary)}',
+      '.roam-compat-warn .roam-compat-message{color:var(--dsw-alias-state-warn-label)}',
+      '.roam-compat-action{margin:2px 0 0;color:var(--dsw-alias-label-tertiary)}',
     ].join('')
 
     /**
@@ -723,14 +746,38 @@ window.__ModuleLoader__.load({
     function Pending({ state, actions, t }) {
       const p = state?.pending
       if (!p) return null
+      const notable = compatNotable(p.compat)
+      const blocked = p.compat?.blocked === true
       return h(
         'div',
         { className: 'roam-card roam-pending' },
         h('p', { className: 'roam-pending-text' }, p.text),
+        notable.length > 0
+          ? h(
+            'ul',
+            { className: 'roam-compat' },
+            notable.map(entry => h(
+              'li',
+              {
+                key: `${entry.level}:${entry.name}:${entry.code}`,
+                className: `roam-compat-item roam-compat-${entry.level}`,
+              },
+              h('p', { className: 'roam-compat-message' }, entry.message),
+              h('p', { className: 'roam-compat-action' }, entry.action),
+            )),
+          )
+          : null,
+        // 有拦下的项时不给可点的确认：这类项的特征正是「点下去不报错、也不生效」，
+        // 让用户先处理掉，比让他事后从「配置看着有、行为不对」倒查要省得多。
+        blocked ? h('p', { className: 'roam-compat-action' }, t('compat.blocked')) : null,
         h(
           'div',
           { className: 'roam-pending-actions' },
-          h(Button, { variant: 'primary', onClick: () => actions?.onConfirm?.() }, p.confirmLabel ?? t('action.confirm')),
+          h(
+            Button,
+            { variant: 'primary', disabled: blocked, onClick: () => actions?.onConfirm?.() },
+            p.confirmLabel ?? t('action.confirm'),
+          ),
           h(Button, { variant: 'ghost', onClick: () => actions?.onCancel?.() }, t('action.cancel')),
         ),
       )
@@ -967,6 +1014,7 @@ window.__ModuleLoader__.load({
             pending: {
               kind,
               token: prepared.token,
+              compat: prepared.compat ?? null,
               confirmLabel: t(spec.confirmLabel),
               text: t(spec.pending, {
                 n: total,
@@ -1122,7 +1170,9 @@ window.__ModuleLoader__.load({
       failureNote,
       describeNote,
       Overview,
+      Pending,
       SectionContainer,
+      compatNotable,
       LOCALES,
       flatten,
       makeT,

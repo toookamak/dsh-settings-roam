@@ -268,6 +268,9 @@ export function createRouteHandlers(deps) {
         token: stash('pull', plan),
         summary: plan.summary,
         skillCheck: plan.skillCheck,
+        // 兼容性检查：哪些项写下去不会生效、哪些会覆盖掉本机的东西。
+        // blocked 为真时界面不该让用户点下确认。
+        compat: plan.compat ?? null,
         // 远程条目数：让界面能说清「云端一共有多少条」
         remoteCount: plan.remoteRows.length,
       })
@@ -313,6 +316,9 @@ export function createRouteHandlers(deps) {
         overview: buildImportOverview(plan),
         // 让界面能说清「这些为什么不写回」，而不是只给一个数字。
         refused: plan.refused,
+        // 与拉取同一份检查：同一个包，从云端拉和从本机目录导入，
+        // 结论必须一样，否则用户没法信任这个检查。
+        compat: plan.compat ?? null,
         empty: plan.empty,
       })
     }

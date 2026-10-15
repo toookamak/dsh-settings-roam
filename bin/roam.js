@@ -235,6 +235,28 @@ async function cmdPush({ service, dshRoot }, options) {
  *
  * 默认只算差异。加 --yes 才会写本机，写之前先备份。
  */
+/**
+ * 打印兼容性检查结果。
+ *
+ * 只打 warn 与 block：ok 的那些是「不需要做什么」，逐条报出来只会把
+ * 真正要注意的几条淹掉。全绿时也要说一句——用户需要知道检查跑过了。
+ */
+function printCompat(compat) {
+  if (compat === null || compat === undefined) return
+  const notable = compat.items.filter(entry => entry.level !== 'ok')
+  console.log('')
+  if (notable.length === 0) {
+    console.log(`兼容性检查：${compat.counts.ok} 项都没有问题。`)
+    return
+  }
+  console.log(`兼容性检查：${notable.length} 项需要注意（不会阻止执行，除非标了「停」）`)
+  for (const entry of notable) {
+    const mark = entry.level === 'block' ? '停' : '!'
+    console.log(`  ${mark} ${entry.message}`)
+    console.log(`    → ${entry.action}`)
+  }
+}
+
 async function cmdPull({ service, dshRoot }, options) {
   if (!service.isConfigured()) {
     console.error('还没配置云端仓库。加一个 --repo <地址>，或在插件设置里填上。')
@@ -248,6 +270,7 @@ async function cmdPull({ service, dshRoot }, options) {
     console.log(JSON.stringify({
       diff: plan.diff,
       summary,
+      compat: plan.compat ?? null,
       cloudRows: plan.remoteRows.map(row => row.id ?? '(无 id)'),
     }, null, 2))
   } else {
@@ -262,7 +285,14 @@ async function cmdPull({ service, dshRoot }, options) {
     }
   }
 
+  if (!options.json) printCompat(plan.compat)
+
   if (!options.yes) {
+    if (plan.compat?.blocked) {
+      console.log('')
+      console.log('上面标了「停」的项必须先处理：直接写下去不会报错，但也不会生效。')
+      return 1
+    }
     console.log('')
     console.log('以上是预览，**本机文件一个字节都没改**。确认无误后加 --yes 再跑一次。')
     return 0
@@ -332,6 +362,7 @@ async function cmdImport({ service }, options) {
       willWrite: plan.patchRows.map(row => `patch:${row.id}`).concat(plan.skillFiles.map(f => f.path)),
       willNotWrite: plan.refused,
       summary: plan.summary,
+      compat: plan.compat ?? null,
       dryRun: true,
     }, null, 2))
     return 0
@@ -359,8 +390,15 @@ async function cmdImport({ service }, options) {
     }
   }
 
+  if (!options.json) printCompat(plan.compat)
+
   if (options.yes !== true) {
     if (options.json) return 0
+    if (plan.compat?.blocked) {
+      console.log('')
+      console.log('上面标了「停」的项必须先处理：直接写下去不会报错，但也不会生效。')
+      return 1
+    }
     console.log('')
     console.log('以上只是计划，本机还没有任何改动。确认无误后加上 --yes 再执行一次。')
     return 0
