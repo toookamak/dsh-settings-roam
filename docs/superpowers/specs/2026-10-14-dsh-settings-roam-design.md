@@ -75,7 +75,17 @@
 **3、4、5 号的失效形态都是「静默」的**，这是本设计必须正视的一点：
 
 - `describe()` 遍历当前活跃 entry，遇到 schema 缺失或 fiber 非 ACTIVE 时 `return []` 静默跳过——**不是抛错，而是少给**。
-- `update(ns, patch)` 按 ns 匹配 entry，匹配不到时内部走「无变化」路径——**写失败也不报错**。
+- `update(ns, patch)` 按 ns 匹配 entry，匹配不到时内部走「无变化」路径——**不抛错**。
+
+  > **实测修正（V1，2026-10-15）**：原文写的是「写失败也不报错」，这不准确。实测表明
+  > 匹配不到时会**经 warn 回调**报 `patch: entry <id> not found`，只是不抛异常。
+  > 同样，`name` 字段与目标行不一致时报 `patch: name mismatch for <id>`。
+  >
+  > 这是**利好**：原设计的假设是「不能靠 try/catch 判断失败，必须写后回读」，方向没错，
+  > 但现在多了一个**更早、更轻**的信号源。因此写路径改为两级判断：
+  > **① warn 回调非空即视为写入异常**（早发现）；**② 写后回读校验**（兜底，仍不可省）。
+  > 依据见 [`test/yaml-loader.test.js`](../../../../test/yaml-loader.test.js)，三条约束的完整说明见 §7.4。
+
 - `ctx.skills.snapshot()` 聚合多个 provider 后的视图，同样可能少给。
 
 因此**不能靠 try/catch 判断失败**，必须主动校验。这就是下面双通道设计的由来。
@@ -549,7 +559,26 @@ SkipReason
 
 **关于 U1 的实现含义**：这条决策是服务层拆成 `preparePush` / `confirmPush` 两段的直接原因（见实现计划 Task 12）。若做成一个原子 `push()`，确认点在架构上就没有位置。
 
-### 7.4 风险
+### 7.4 写路径的三条实测约束（C1／C2／C3）
+
+本节内容是设计阶段**不知道**的，由 V1 验证（2026-10-15）在真实 `cordis.patch.yml` 样本上实测得出。
+它们不是偏好，而是官方 Loader 的行为事实，写路径的实现完全由它们决定。依据见 [`test/yaml-loader.test.js`](../../../../test/yaml-loader.test.js)。
+
+| # | 约束 | 实测行为 | 实现后果 |
+|---|---|---|---|
+| **C1** | 目标行不存在时必须用 `insert`，不能用 id-patch | id-patch 打空行会**静默跳过**，只经 warn 回调报 `patch: entry <id> not found`，**不抛错** | 新机器首次拉取、或某条目被手工删过，都必须走 insert 路径 |
+| **C2** | warn 回调必须显式收集，**回调非空即视为写入异常** | 匹配失败与 name 不符都只经 warn 回调上报 | 写路径改两级判断：① warn 非空即失败（早发现）② 写后回读（兜底） |
+| **C3** | 匹配成立时 `config` 是**全量替换**，不是深合并 | 实测中目标行原有的 `extra: keep-me` 被整个抹掉 | 合并必须在内存里先做（读出本机 → 改指定条目 → 整体写回），不能指望 patch 做局部合并 |
+
+**C3 的独立印证**：官方自己的 `packages/boot/web-app/cordis.patch.yml` 第 5-6 行原文写道：
+「A patch replaces the targeted row's whole `config`, so each row below restates every key it owns.」
+即连官方也要求每个 patch 行**重述它拥有的全部键**。
+
+**C2 对原设计的修正**：§2.3 原假设「不能靠 try/catch 判断失败，必须写后回读」。
+方向正确，但漏掉了 warn 回调这个**更早、更轻**的信号源。现在两级都要保留：
+warn 负责早发现，回读负责兜底——因为 warn 无法覆盖「写进去了但内容不对」的情况。
+
+### 7.5 风险
 
 | 风险 | 说明 | 缓解 |
 |---|---|---|

@@ -4,7 +4,7 @@
 
 - 包名：`@toookamak/dsh-settings-roam`
 - 界面显示名：设置漫游
-- 当前状态：**设计已确认，尚未开始实现**
+- 当前状态：**第一期已实现，端到端演练通过；尚未在真实远端仓库上试用**
 
 ## 它解决什么
 
@@ -39,6 +39,8 @@
 ## 文档
 
 - 设计文档：[`docs/superpowers/specs/2026-10-14-dsh-settings-roam-design.md`](docs/superpowers/specs/2026-10-14-dsh-settings-roam-design.md)
+- 实现计划：[`docs/superpowers/plans/2026-10-15-dsh-settings-roam-phase1.md`](docs/superpowers/plans/2026-10-15-dsh-settings-roam-phase1.md)
+- 端到端演练记录：[`docs/superpowers/plans/phase1-drill-log.md`](docs/superpowers/plans/phase1-drill-log.md)
 
 设计文档是接手这个项目时的**唯一入口**：§2 记录了调研中实测到的 DSH 内部事实（配置分层、对官方接口的依赖与双通道读写、官方与第三方的判定口径、环境目录构成），§4 是归属表，§7 是已锁定的决策清单与仍需决定的开放项。
 
@@ -46,17 +48,62 @@
 
 | 路径 | 内容 |
 |---|---|
+| `index.js` | 宿主半侧：装配同步服务，注册为 `ctx.settingsRoam` |
+| `client.js` | 浏览器半侧：往设置分区贡献一节（不占侧边栏） |
+| `cordis.patch.yml` | 插件自己的装载条目 |
+| `src/` | 全部实现，无构建步骤 |
+| `test/` | 单元测试（107 用例） |
+| `scripts/` | 可重复执行的验收脚本 |
 | `docs/superpowers/specs/` | 设计文档 |
-| `README.md` | 本文件 |
+| `docs/superpowers/plans/` | 实现计划与演练记录 |
 
-## 尚未存在的东西
+### `src/` 各模块职责
 
-以下都还没有，是后续阶段要建的：
+| 模块 | 职责 |
+|---|---|
+| `src/ownership.js` | 归属表三态（公共／本机／不同步）；未知项一律判为不同步 |
+| `src/yaml-loader.js` | Loader YAML 方言的解析、按顶层条目切分、合并写回 |
+| `src/extract.js` | 从本机配置抽出公共线；识别 insert 行等不可预期的盘外配置 |
+| `src/bundles.js` | 官方／第三方插件判定 |
+| `src/skills.js` | 技能目录的读取、复制与双通道交叉校验 |
+| `src/snapshot.js` | 快照清单的构建与解析（schema 版本化） |
+| `src/diff.js` | 本机与云端的逐项差异 |
+| `src/backup.js` | 应用前按时间戳备份，以及回退 |
+| `src/apply.js` | 备份 → 合并 → 写入 → 写后回读校验 |
+| `src/service.js` | 同步服务：推送与拉取各拆 prepare／confirm 两段 |
+| `src/report.js` | 恢复报告：每类跳过原因给可行动的说明 |
+| `src/home-paths.js` | 解析 DSH 数据根目录（`DSH_HOME` 或默认位置） |
+| `src/backends/` | 同步介质抽象与 git 实现 |
 
-- 插件本体（`package.json`、`index.js`、`client.js`、`cordis.patch.yml`、`locale/`、`icon.svg`）
-- 实现计划
-- 任何同步逻辑
+### 验收脚本
 
-## 依赖的第一个待验证项
+两个脚本自建隔离目录，不触碰你正在使用的 profile，可重复执行：
 
-公共线需要对 `cordis.patch.yml` 做「按 key 抽取 + 合并写回」，这需要一个能处理 DSH 自己的 Loader YAML 方言的解析器。**这是整个方案成立的前提**，实现计划的第一项应当是验证它。
+| 脚本 | 验证什么 |
+|---|---|
+| `node scripts/verify-load.mjs` | 插件能否被 DSH 真实装载并激活 |
+| `node scripts/drill-e2e.mjs` | 推送／拉取两条流程在「两台机器」上能否跑通（34 项核对） |
+
+## 第一期做完的范围
+
+第一期交付的是**配置同步**，不是**环境复制**。这条边界很重要，避免误解：
+
+| 能做到 | 还做不到 |
+|---|---|
+| 把 DSH 自身与官方插件的公共配置推到云端、在另一台机器拉取并应用 | 在新机器上自动把插件装好——插件名单会同步，但驱动安装是第二期 |
+| 保证本机的监听地址、主题、权限预设、默认模型**不跟着漂移** | 同步第三方插件（含人设）的配置——第三期 |
+| 应用前自动备份，报告里给出可用的回退路径 | 云端历史版本管理——第二期 |
+| 每类跳过原因给出可行动的说明 | WebDAV 等其他介质——第二期 |
+
+**尚未在真实远端仓库上试过。** 端到端演练用的是本地裸库，不走网络，
+因此远端认证、网络中断、并发冲突这些情况还没有实测。
+
+## 曾经的前提验证（已完成）
+
+公共线需要对 `cordis.patch.yml` 做「按 key 抽取 + 合并写回」，这需要一个能处理 DSH 自己的 Loader YAML 方言的解析器。**这曾是整个方案成立的前提。**
+
+**结论：成立，且已实测。** 真实样本（118 行、9 个顶层条目）可被正确切分为公共 1 项与本机 8 项，`!!js` 表达式往返不被求值，合并写回不破坏本机条目。
+据此还实测出三条设计文档原先未写明的写路径约束（C1 目标行不存在必须用 insert、C2 警告回调非空即视为写入异常、C3 config 是全量替换而非深合并），
+详见设计文档 §7.4 与 [`test/yaml-loader.test.js`](test/yaml-loader.test.js)。
+
+**已知代价**：合并写回会丢失原配置里的注释与手工排版（官方自己的渲染器 `renderConfigDump` 同样如此）。这是有意接受的取舍。

@@ -1142,7 +1142,7 @@ test('insert 行不作为配置项抽取（否则会写坏别的机器的加载�
  * 不是整个文件——按文件整体同步会把 webserver.host 的局域网 IP 带到新机器上，
  * 恰好犯下本项目要解决的那个错误。
  *
- * 风险评估（设计 §7.3 最后一行）：第三方插件会在 patch 里留下 insert 行。
+ * 风险评估（设计 §7.5 风险表）：第三方插件会在 patch 里留下 insert 行。
  * 若误把 insert 行当配置项抽取，会写坏别的机器的加载顺序。所以这里显式识别并排除。
  */
 
@@ -1981,7 +1981,7 @@ git commit -m "应用器：备份→合并→写入→写后回读校验，警�
 - Create: `src/backends/git.js`
 - Test: `test/backends-git.test.js`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 创建 `test/backends-git.test.js`。全程只用本地裸库，**不碰网络**：
 
@@ -2115,12 +2115,12 @@ test('错误信息不泄露 URL 中的凭据', async () => {
 })
 ```
 
-- [ ] **Step 2: 运行测试，确认失败**
+- [x] **Step 2: 运行测试，确认失败**
 
 运行：`node --test test/backends-git.test.js`
 预期：FAIL，`Cannot find module '../src/backends/index.js'`
 
-- [ ] **Step 3: 实现后端抽象**
+- [x] **Step 3: 实现后端抽象**
 
 创建 `src/backends/index.js`：
 
@@ -2160,7 +2160,7 @@ export function assertBackend(backend) {
 }
 ```
 
-- [ ] **Step 4: 实现 git 后端**
+- [x] **Step 4: 实现 git 后端**
 
 创建 `src/backends/git.js`：
 
@@ -2325,12 +2325,12 @@ export function createGitBackend(config) {
 }
 ```
 
-- [ ] **Step 5: 运行测试，确认通过**
+- [x] **Step 5: 运行测试，确认通过**
 
 运行：`node --test test/backends-git.test.js`
 预期：PASS，10 个测试通过
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add src/backends/index.js src/backends/git.js test/backends-git.test.js
@@ -2353,7 +2353,7 @@ git commit -m "介质：后端抽象与 git 实现，凭据交给系统 git 且�
 - Create: `src/service.js`
 - Test: `test/service.test.js`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 创建 `test/service.test.js`：
 
@@ -2519,12 +2519,12 @@ test('报告列出需要补的密钥引用名', async () => {
 })
 ```
 
-- [ ] **Step 2: 运行测试，确认失败**
+- [x] **Step 2: 运行测试，确认失败**
 
 运行：`node --test test/service.test.js`
 预期：FAIL，`Cannot find module '../src/service.js'`
 
-- [ ] **Step 3: 实现同步服务**
+- [x] **Step 3: 实现同步服务**
 
 创建 `src/service.js`：
 
@@ -2762,12 +2762,12 @@ export function createSyncService(config) {
 }
 ```
 
-- [ ] **Step 4: 运行测试，确认通过**
+- [x] **Step 4: 运行测试，确认通过**
 
 运行：`node --test test/service.test.js`
 预期：PASS，7 个测试通过
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/service.js test/service.test.js
@@ -2786,7 +2786,7 @@ git commit -m "服务：推送与拉取各拆 prepare/confirm 两段，确认点
 - Create: `src/report.js`
 - Test: `test/report.test.js`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 创建 `test/report.test.js`：
 
@@ -2863,12 +2863,12 @@ test('跳过原因常量表覆盖设计规定的全部取值', () => {
 })
 ```
 
-- [ ] **Step 2: 运行测试，确认失败**
+- [x] **Step 2: 运行测试，确认失败**
 
 运行：`node --test test/report.test.js`
 预期：FAIL，`Cannot find module '../src/report.js'`
 
-- [ ] **Step 3: 实现报告模块**
+- [x] **Step 3: 实现报告模块**
 
 创建 `src/report.js`：
 
@@ -2961,12 +2961,12 @@ export function buildReportView(report) {
 }
 ```
 
-- [ ] **Step 4: 运行测试，确认通过**
+- [x] **Step 4: 运行测试，确认通过**
 
 运行：`node --test test/report.test.js`
 预期：PASS，8 个测试通过
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/report.js test/report.test.js
@@ -3043,7 +3043,7 @@ shell
 
 ---
 
-- [ ] **Step 1: 先验证 E4——手写 lazy-CJS bundle 能否被真装载**
+- [x] **Step 1: 先验证 E4——手写 lazy-CJS bundle 能否被真装载**
 
 这一步是本任务的成立性前提，**必须先做**。在做界面之前，先写一个最小体量的 `client.js` 装进去，确认它被客户端模块系统接受。
 
@@ -3111,13 +3111,13 @@ test('patch 文件把自己插进 Loader（E1 的配套）', () => {
 })
 ```
 
-- [ ] **Step 2: 运行测试，确认全部失败**
+- [x] **Step 2: 运行测试，确认全部失败**
 
 运行：`node --test test/loader-shape.test.js`
 
 预期：FAIL。报错指向 `index.js`、`client.js`、`cordis.patch.yml` 不存在。这正是要修的缺口。
 
-- [ ] **Step 3: 写 `cordis.patch.yml`**
+- [x] **Step 3: 写 `cordis.patch.yml`**
 
 参照官方 `dshmarket` 的形态（`~/.dsh/profiles/web/node_modules/dshmarket/cordis.patch.yml`），它的 patch 极简，只有一行 insert：
 
@@ -3132,7 +3132,7 @@ test('patch 文件把自己插进 Loader（E1 的配套）', () => {
 
 `name` 必须是**裸包名**（E2），写成子路径会导致浏览器半侧挂不上。
 
-- [ ] **Step 4: 写 `index.js`（宿主半侧）**
+- [x] **Step 4: 写 `index.js`（宿主半侧）**
 
 宿主半侧的职责：注册一个工具供模型调用，把 Task 12 的服务暴露出去。**真实的工具注册 API 见官方 Task 相关文档**；本期先做到「插件能被加载、设置分区能出现」为止，工具注册若接口不确定就留 TODO 并在文档里记明，不要凭印象写。
 
@@ -3162,7 +3162,7 @@ export function apply(ctx, config) {
 }
 ```
 
-- [ ] **Step 5: 写 `client.js`（浏览器半侧，手写 lazy-CJS）**
+- [x] **Step 5: 写 `client.js`（浏览器半侧，手写 lazy-CJS）**
 
 严格按 E3 的格式。下面是最小可用形态，依赖只取 `react` 与设置分区注入进来的能力：
 
@@ -3196,7 +3196,7 @@ window.__ModuleLoader__.load({
 
 **这一段就是 E4 的验证物**：它没有经过任何打包器，全是手写的普通 JS。若 Step 8 的真装载通过，则「纯 JS 无构建」路线成立，后续界面继续用这个形态扩写；若不通过，则必须在这里停下，引入 tsdown 并把结论写回设计文档。
 
-- [ ] **Step 6: 补 `package.json` 的 `dsh.client` 与 `icon.svg`、`locale/`**
+- [x] **Step 6: 补 `package.json` 的 `dsh.client` 与 `icon.svg`、`locale/`**
 
 `package.json` 补（保持 `bundle.patch` 不变，它是宿主半侧的装载）：
 
@@ -3223,14 +3223,14 @@ window.__ModuleLoader__.load({
 }
 ```
 
-- [ ] **Step 7: 运行测试，确认通过**
+- [x] **Step 7: 运行测试，确认通过**
 
 运行：`node --test test/loader-shape.test.js`
 预期：PASS，6 个测试通过
 
 再跑全量：`npm test`，确认既有 76 个用例没有回归。
 
-- [ ] **Step 8: 真装载验收（本任务的关键一步，手工）**
+- [x] **Step 8: 真装载验收（本任务的关键一步，手工）**
 
 这一步**不能用单元测试替代**。E1／E4 是装载期的行为，只有真装一次才算验证。
 
@@ -3307,11 +3307,11 @@ git commit -m "装载层：宿主半侧、手写 lazy-CJS 浏览器半侧与真�
 **Files:**
 - Create: `docs/superpowers/plans/phase1-drill-log.md`（演练记录，含实测输出）
 
-- [ ] **Step 1: 准备两台机器状态（或两个 profile 模拟）**
+- [x] **Step 1: 准备两台机器状态（或两个 profile 模拟）**
 
 用两个独立的 `.dsh` 根目录模拟两台机器。准备主机 A 与从机 B，两者都配好一个可用的 git 后端（本地裸仓库即可，不需要真远端）。
 
-- [ ] **Step 2: 走通推送流程（设计 §3.2）**
+- [x] **Step 2: 走通推送流程（设计 §3.2）**
 
 在 A 上执行推送的 prepare → 展示 diff → confirm 三段，逐项核对：
 
@@ -3319,11 +3319,11 @@ git commit -m "装载层：宿主半侧、手写 lazy-CJS 浏览器半侧与真�
 |---|---|
 | 公共线只含 `llm-pi-ai` | patch 里只有这一项进快照 |
 | `webserver.host` 的局域网 IP **不在**快照里 | 这是本项目要解决的根本问题，必须确认 |
-| 未预期的盘外配置触发提示 | 设计 §7.3 的 insert 行风险有告警 |
+| 未预期的盘外配置触发提示 | 设计 §7.5 的 insert 行风险有告警 |
 | 技能目录被收进去 | Task 5 的读写生效 |
 | 云端仓库出现一次提交 | git 后端工作正常 |
 
-- [ ] **Step 3: 走通拉取流程（设计 §3.3）**
+- [x] **Step 3: 走通拉取流程（设计 §3.3）**
 
 在 B 上执行拉取，逐项核对：
 
@@ -3335,18 +3335,18 @@ git commit -m "装载层：宿主半侧、手写 lazy-CJS 浏览器半侧与真�
 | 报告里出现「本机偏好未随行」的提示 | 设计决策 8 |
 | 备份目录里有拉取前的副本 | 回退路径可用 |
 
-- [ ] **Step 4: 反向验证——故意造成失败，确认报告说得清楚**
+- [x] **Step 4: 反向验证——故意造成失败，确认报告说得清楚**
 
 这一步验证的是**失败时用户能不能看懂**，而不是成功路径。
 
 1. 在快照里放一个来自本机路径的插件，再让 B 拉取 → 确认报告指出是哪条路径、说出来源机器
 2. 把 B 的备份恢复回去 → 确认回退可用
 
-- [ ] **Step 5: 记录演练结论**
+- [x] **Step 5: 记录演练结论**
 
 把每一步的实际输出与偏差写进 `docs/superpowers/plans/phase1-drill-log.md`。**偏差要原样记录，不要只写「通过」**——这是后续任务与二期决策的依据。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add docs/superpowers/plans/phase1-drill-log.md
@@ -3368,19 +3368,31 @@ git commit -m "演练：第一期端到端流程记录与偏差"
 - Modify: `docs/superpowers/specs/2026-10-14-dsh-settings-roam-design.md`
 - Modify: `README.md`
 
-- [ ] **Step 1: 回写设计文档的 update() 失败行为**
+- [x] **Step 1: 回写设计文档的 update() 失败行为**
 
 把 §2.3 的相关句子改为实测结论，并注明依据来自 V1 验证（`test/yaml-loader.test.js`）。保留原有的「必须写后回读」要求，但补充 warn 回调是更早的信号源。
 
-- [ ] **Step 2: 回写 README**
+- [x] **Step 2: 回写 README**
 
-第 60-62 行从「待验证」改成「已验证」，结论指向设计文档 §7.3 与 `test/yaml-loader.test.js`。同时更新 README 的「尚未存在的东西」清单——第一期做完后，那些东西大部分已经存在了，**这份清单必须与事实一致，否则它就是错误的文档**。
+第 60-62 行从「待验证」改成「已验证」，结论指向设计文档 §7.4 与 `test/yaml-loader.test.js`。同时更新 README 的「尚未存在的东西」清单——第一期做完后，那些东西大部分已经存在了，**这份清单必须与事实一致，否则它就是错误的文档**。
 
-- [ ] **Step 3: 核对设计文档的引文偏移**
+- [x] **Step 3: 核对设计文档的引文偏移** —— 核对完毕，**设计文档无偏移，无需修改**
 
-已知一处：设计文档引用 `packages/boot/plugin-manager/src/index.ts:323`，实际 `availability` 的赋值在 `:322`。校对设计文档中所有文件行号引用，修正偏移。
+曾怀疑 `availability` 的赋值行号应为 `:322` 而非 `:323`。逐行核对原始源码后确认：
 
-- [ ] **Step 4: 提交**
+| 引用位置 | 设计文档写的 | 实际内容 | 结论 |
+|---|---|---|---|
+| `packages/boot/plugin-manager/src/index.ts:297` | `shipped` 的计算 | `const shipped = Object.hasOwn(installation.dependencies ?? {}, name)` | ✓ 正确 |
+| `packages/boot/plugin-manager/src/index.ts:299` | `official` 的计算 | `const official = optional || offered !== undefined` | ✓ 正确 |
+| `packages/boot/plugin-manager/src/index.ts:323` | `availability` 的赋值 | `availability = shipped ? 'installation' : 'profile'` | ✓ 正确 |
+
+`:322` 是 `const info = bundleManifest(...)`，`:323` 才是赋值语句——它位于 `try` 块内。
+
+**真正的偏移在我的工作笔记里，不在设计文档里。** 这条「待修正」是本计划继承的一处
+未经核实的猜测；若当时直接照改设计文档，就会把对的改成错的。教训：引文行号在下游文档里
+被转述时最容易失真，**修正前必须先回原始源码核对**。
+
+- [x] **Step 4: 提交**
 
 ```bash
 git add docs/superpowers/specs/2026-10-14-dsh-settings-roam-design.md README.md
