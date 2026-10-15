@@ -12,7 +12,8 @@ import z from '@deepseek-ai/schemastery'
 import { resolveDshHome } from './src/home-paths.js'
 import { createGitBackend } from './src/backends/git.js'
 import { createSyncService } from './src/service.js'
-import { buildPushOverview } from './src/overview.js'
+import { buildPushOverview, buildPullOverview } from './src/overview.js'
+import { describeRoutes } from './src/routes.js'
 
 export const name = 'settings-roam'
 
@@ -194,6 +195,25 @@ export function apply(ctx, config) {
       })
       return { plan, overview: buildPushOverview(plan) }
     },
+  })
+
+  // 浏览器半侧取数的通道。
+  //
+  // 浏览器半侧是独立加载的 bundle，拿不到这个模块里的 service，也读不了文件系统，
+  // 所以「本机现在有什么」只能由宿主经 HTTP 路由送出去。用 ctx.inject 而不是
+  // 直接读 ctx.connection：connection 只存在于 Web 平台，而命令行下这个插件
+  // 依然要能工作（第一阶段的 roam export 就不需要它）。缺了它只是没有界面，
+  // 不该让整个插件不启动。
+  //
+  // 每条路由都经 ctx.effect 注册，卸载插件时随之注销——这也是它比在模块级
+  // 挂一个全局 HTTP 服务正确的地方：一个进程可能加载多份 profile。
+  ctx.inject(['connection'], (scope) => {
+    for (const route of describeRoutes({ service, buildPushOverview, buildPullOverview })) {
+      scope.effect(
+        () => scope.connection.fetch.register(route),
+        `dsh-settings-roam: route ${route.path}`,
+      )
+    }
   })
 
   ctx.logger?.info?.(

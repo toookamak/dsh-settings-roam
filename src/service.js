@@ -543,6 +543,36 @@ export function createSyncService(config) {
     dshRoot,
 
     /**
+     * 描述当前的目标 profile，**不抛错**。
+     *
+     * 为什么不做成一个 profileName 属性：解析在一个 profile 都没有或存在多个时
+     * 会失败（见 resolveProfileName），而界面每次打开都要读它。属性的形式会让
+     * 「读取当前状态」这件事在特定环境下直接炸掉，界面无从显示原因。
+     * 这里把失败也当作一种可展示的状态返回。
+     *
+     * @returns {{name: string|null, resolved: boolean, reason: string|null}}
+     */
+    describeProfile() {
+      try {
+        return { name: resolveProfileName(), resolved: true, reason: null }
+      } catch (error) {
+        return { name: explicitProfile, resolved: false, reason: String(error?.message ?? error) }
+      }
+    },
+
+    /**
+     * 默认备份目录。
+     *
+     * 和 defaultExportRoot 同理：备份放哪儿归服务层定，界面只需要用。
+     * 拉取会改本机文件，因此备份不是可选项——留空就等于「应用前不备份」，
+     * 那会让报告里的回退路径变成一句空话。
+     * @returns {string}
+     */
+    defaultBackupRoot() {
+      return join(dshRoot, 'settings-roam', 'backup')
+    },
+
+    /**
      * 默认导出目录。
      *
      * 导出目录的默认值归服务层定，不归界面定：界面是浏览器半侧，

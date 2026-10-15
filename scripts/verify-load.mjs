@@ -55,7 +55,7 @@ function run(args, options = {}) {
  * @param {number} waitMs - 最长等待时间
  * @returns {string} 合并后的输出
  */
-function bootAndCapture(waitMs = 45_000, required = []) {
+function bootAndCapture(waitMs = 45_000, required = [], probe = null) {
   return new Promise((resolvePromise) => {
     const child = spawn(process.execPath, [cliBin, '--profile', profile], {
       env: { ...process.env, DSH_HOME: home, ROAM_PROBE_OUT: join(home, "roam-probe.log") },
@@ -64,12 +64,28 @@ function bootAndCapture(waitMs = 45_000, required = []) {
     let out = ''
     let settled = false
     let graceTimer = null
+    let probing = false
     const finish = () => {
       if (settled) return
       settled = true
       clearTimeout(timer)
       clearTimeout(graceTimer)
       resolvePromise(out)
+    }
+    const stop = () => {
+      child.kill('SIGTERM')
+      finish()
+    }
+    // probe 是「趁进程还活着问它一句」的机会：真发一次 HTTP 请求，
+    // 比事后看日志有没有报错强得多——路由指歪了、没注册上都只有真请求才知道。
+    const runProbe = () => {
+      if (probing) return
+      probing = true
+      const url = (out.match(/dsh web:\s*(https?:\/\/\S+)/) ?? [])[1] ?? null
+      Promise.resolve()
+        .then(() => (probe === null ? undefined : probe(url, out)))
+        .catch(error => { probeError = error })
+        .finally(() => { clearTimeout(graceTimer); stop() })
     }
     const ready = () => {
       // 必须等所有期望的信号都出现再收尾，否则会在探针打印之前就把它杀掉。
@@ -79,13 +95,10 @@ function bootAndCapture(waitMs = 45_000, required = []) {
     }
     const onData = (chunk) => {
       out += chunk
-      if (ready()) {
+      if (ready() && !probing) {
         clearTimeout(graceTimer)
-        // 稍等片刻收集同批日志，然后终止
-        graceTimer = setTimeout(() => {
-          child.kill('SIGTERM')
-          finish()
-        }, 400)
+        // 稍等片刻收集同批日志，再发请求
+        graceTimer = setTimeout(runProbe, 400)
       }
     }
     child.stdout.on('data', onData)
@@ -98,6 +111,10 @@ function bootAndCapture(waitMs = 45_000, required = []) {
     }, waitMs)
   })
 }
+
+/** 请求探针带出来的结果，供第 8 步断言。 */
+let routeProbe = { attempted: false, error: null, status: null, body: null }
+let probeError = null
 
 function cleanup() {
   // ROAM_KEEP=1 时保留隔离目录，便于事后翻日志排查；默认清理干净。
@@ -226,7 +243,34 @@ try {
 
   // 5. 真正启动一次，看有没有 "did not activate"。
   //    这是本脚本存在的理由：装载期行为只能靠真装一次来看。
-  const output = await bootAndCapture(60_000, [/ROAM-PROBE/])
+  const output = await bootAndCapture(60_000, [/ROAM-PROBE/], async (url) => {
+    routeProbe.attempted = true
+    if (url === null) {
+      routeProbe.error = '没能从启动输出里取到服务地址'
+      return
+    }
+    // 界面看到的每一件事都经过这条路由。真请求一次，才算验证了「句柄能通」。
+    //
+    // 但 Connection 层在物理载体上先施加一套信任策略：不带会话 cookie 的请求
+    // 一律 401（packages/client/connection/src/browser-auth.ts:315 的
+    // writeUnauthorized）。浏览器是先打开 `/?token=…` 换成 cookie 再访问 API 的，
+    // 这里照做——否则验的就不是「界面能不能取数」，而是「不认证能不能取数」。
+    const base = new URL(url)
+    routeProbe.url = base.origin
+    const token = base.searchParams.get('token')
+    const headers = {}
+    if (token !== null) {
+      const handshake = await fetch(`${base.origin}/?token=${encodeURIComponent(token)}`, {
+        redirect: 'manual',
+      })
+      const cookie = handshake.headers.getSetCookie?.()?.[0]
+        ?? handshake.headers.get('set-cookie')
+      if (cookie) headers.cookie = cookie.split(';')[0]
+    }
+    const res = await fetch(`${base.origin}/api/settings-roam.status`, { headers })
+    routeProbe.status = res.status
+    routeProbe.body = await res.json().catch(() => null)
+  })
 
   if (/did not activate/.test(output)) {
     console.error('✗ 插件未能激活：')
@@ -281,6 +325,49 @@ try {
     failed = true
   } else {
     console.log('✓ 无「未识别的配置项」告警——已声明的配置键与 loader 传入的形状一致')
+  }
+
+  // 8. 真发一次请求，确认界面取数的那条路由真的通了。
+  //    前面几步证明的是「插件装上了、激活了、表单有了」；
+  //    这一步证明的是「设置页上那两个按钮真能拿到数据」。
+  //    两者是不同的失败面：路由没注册、路径写歪、handler 返回了非 Response，
+  //    都不影响前几步通过。
+  if (probeError !== null) {
+    console.error(`✗ 路由探针自身出错：${probeError.message}`)
+    failed = true
+  } else if (!routeProbe.attempted) {
+    console.error('✗ 没能对运行中的实例发请求（未到达可探针的阶段）')
+    failed = true
+  } else if (routeProbe.error !== null) {
+    console.error(`✗ ${routeProbe.error}`)
+    failed = true
+  } else if (routeProbe.status !== 200) {
+    console.error(`✗ /api/settings-roam.status 返回 HTTP ${routeProbe.status}`
+      + `（请求 ${routeProbe.url}）${routeProbe.status === 401 ? '——会话未建立' : ''}`)
+    console.error(`  ${JSON.stringify(routeProbe.body)}`)
+    failed = true
+  } else if (routeProbe.body?.ok !== true) {
+    console.error('✗ 路由通了但响应体不合约定：')
+    console.error(`  ${JSON.stringify(routeProbe.body)}`)
+    failed = true
+  } else {
+    const b = routeProbe.body
+    // 光「返回 200」不足以下结论：路径解析错了也会返回一份全 0 的合法响应。
+    // 所以还要断言它读的确实是我们这个隔离 profile 的 patch 文件。
+    const problems = []
+    if (b.patchExists !== true) problems.push('没找到 profile 的 patch 文件（路径解析可能错了）')
+    if (b.profile?.name !== profile) problems.push(`profile 名不符：${b.profile?.name} ≠ ${profile}`)
+    if (!String(b.exportRoot ?? '').startsWith(home)) problems.push(`导出目录不在隔离根下：${b.exportRoot}`)
+    if (problems.length > 0) {
+      console.error('✗ 路由通了，但它看的不是我们期望的那个 profile：')
+      for (const p of problems) console.error(`  ${p}`)
+      failed = true
+    } else {
+      console.log(`✓ 界面取数路由可用：HTTP 200，本机公共配置 ${b.sharedCount} 项、`
+        + `本机专属 ${b.machineCount} 项、技能 ${b.skillCount} 个`)
+      console.log(`  profile=${b.profile.name} 已配置云端=${b.configured}`
+        + ` patch 文件已读到=${b.patchExists}`)
+    }
   }
 
   if (/dsh web: http/.test(output)) {

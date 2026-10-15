@@ -410,3 +410,183 @@ test('没有概述数据时不渲染区块 —— 不给空壳', async () => {
   assert.equal(exported.Overview({ state: {} }), null)
   assert.equal(exported.Overview({ state: { overview: null } }), null)
 })
+
+// ─── 挂载契约（本轮实测发现的真问题）─────────────────────────────────
+// 原先 client.js 只导出一堆组件，没有 apply 与 inject：
+// 模块加载器会接受它，但没有任何东西会去挂载，设置页上是一片空白且不报错。
+// 官方 packages/session-query/session-log-export/lib/client.js 末尾同样是
+// `exports.apply = apply; exports.inject = inject`。
+
+/** 按官方协议加载一次客户端 bundle，返回导出对象。 */
+async function loadClient(tag) {
+  let exported = null
+  globalThis.window = {
+    __ModuleLoader__: {
+      load: ({ factory }) => {
+        exported = factory((spec) => {
+          if (spec === 'react') {
+            return {
+              createElement: (type, props, ...children) => ({ type, props, children }),
+              useState: v => [v, () => {}],
+              useCallback: f => f,
+              useEffect: () => {},
+            }
+          }
+          throw new Error(`未预期的依赖：${spec}`)
+        })
+      },
+    },
+  }
+  try {
+    await import(`../client.js?${tag}=${Date.now()}`)
+  } finally {
+    delete globalThis.window
+  }
+  return exported
+}
+
+test('客户端导出 apply 与 inject —— 否则界面一片空白且不报错', async () => {
+  const exported = await loadClient('mount')
+  assert.equal(typeof exported.apply, 'function', '必须导出 apply，否则没有东西会挂载它')
+  assert.equal(typeof exported.inject, 'function', '必须导出 inject')
+})
+
+test('客户端不声明用不上的依赖', async () => {
+  const exported = await loadClient('deps')
+  // 声明了不用的依赖，宿主改名时本插件会连带拒绝启动 —— 白白多一处失效点。
+  assert.deepEqual(exported.inject(), [], '本插件只用 React 与 fetch，无需额外依赖')
+})
+
+test('apply 经 slots.inject 注册到 settings.section 槽位', async () => {
+  const exported = await loadClient('slot')
+
+  const registered = []
+  let injectedSlot = null
+  const ctx = {
+    slots: {
+      inject: (name, fn) => {
+        injectedSlot = name
+        fn()
+      },
+      register: (spec, component) => {
+        registered.push({ spec, component })
+        return () => {}
+      },
+    },
+  }
+
+  exported.apply(ctx)
+
+  assert.equal(injectedSlot, 'settings.section', '槽位名必须是字符串 settings.section')
+  assert.equal(registered.length, 1, '只贡献一节，不占别处（界面决策 U2）')
+  const { spec, component } = registered[0]
+  assert.equal(spec.name, 'settings.section', '注册 spec 里的 name 也要是这个字符串')
+  assert.equal(spec.id, 'settings-roam', 'id 用于去重与卸载')
+  assert.equal(typeof spec.label, 'function', '分区标签必须是函数（延迟取语言包）')
+  assert.equal(spec.locale, '@toookamak/dsh-settings-roam')
+  assert.equal(typeof component, 'function', '挂载的必须是组件')
+})
+
+test('apply 在语言服务缺席时仍能给出标签 —— 不因取不到翻译就整节不显示', async () => {
+  const exported = await loadClient('label')
+  const registered = []
+  // 刻意不给 ctx.locale：命令行/早期启动阶段它可能还没就绪
+  const ctx = {
+    slots: {
+      inject: (name, fn) => fn(),
+      register: (spec, component) => registered.push({ spec, component }),
+    },
+  }
+  exported.apply(ctx)
+  const label = registered[0].spec.label()
+  assert.equal(typeof label, 'string')
+  assert.ok(label.length > 0, '标签必须有兜底文案')
+})
+
+test('apply 注册的标签优先取语言包', async () => {
+  const exported = await loadClient('label2')
+  const registered = []
+  const ctx = {
+    slots: {
+      inject: (name, fn) => fn(),
+      register: (spec, component) => registered.push({ spec, component }),
+    },
+    locale: { bind: () => (key) => (key === 'nav' ? '设置漫游（译）' : key) },
+  }
+  exported.apply(ctx)
+  assert.equal(registered[0].spec.label(), '设置漫游（译）')
+})
+
+// ─── U1：推送前必须先确认 ────────────────────────────────────────────
+
+/**
+ * 把元素树展开到「宿主元素」一层。
+ *
+ * 测试用的 createElement 不认识函数型 type，所以 h(Section, …) 产出的树里
+ * 仍嵌着 {type: Pending, props} 这样的组件元素。真正渲染它们要 React；
+ * 这里只需要它们的输出，于是手动调一次。
+ */
+function render(el) {
+  if (el === null || el === undefined || typeof el !== 'object') return el
+  if (typeof el.type === 'function') return render(el.type(el.props ?? {}))
+  return {
+    ...el,
+    children: (el.children ?? []).map(render).filter(c => c !== null && c !== undefined),
+  }
+}
+
+test('待确认区块给出「确认」与「取消」两个动作', async () => {
+  const exported = await loadClient('pending')
+  const clicked = []
+  const state = {
+    kind: 'clean',
+    pending: { kind: 'push', token: 'tok-1', text: '将推送 3 个文件', confirmLabel: '确认推送' },
+  }
+  const actions = {
+    onConfirm: () => clicked.push('confirm'),
+    onCancel: () => clicked.push('cancel'),
+  }
+
+  const section = render(exported.Section({ state, actions }))
+  // 待确认区在动作区内部，作为按钮的兄弟节点
+  const actionsEl = section.children.find(c => c?.props?.className === 'roam-actions')
+  const pending = actionsEl.children.find(c => c?.props?.className === 'roam-pending')
+  assert.ok(pending, '有待确认内容时必须渲染出来 —— 确认点得看得见')
+
+  const buttons = pending.children.find(c => c?.props?.className === 'roam-pending-actions').children
+  // createElement 的 children 是数组，取第一个作为按钮文字
+  assert.deepEqual(buttons.map(b => b.children[0]), ['确认推送', '取消'])
+
+  buttons[0].props.onClick()
+  buttons[1].props.onClick()
+  assert.deepEqual(clicked, ['confirm', 'cancel'])
+})
+
+test('没有待确认内容时不渲染待确认区 —— 不给空壳', async () => {
+  const exported = await loadClient('pending2')
+  const section = render(exported.Section({ state: { kind: 'clean' }, actions: {} }))
+  const actionsEl = section.children.find(c => c?.props?.className === 'roam-actions')
+  assert.ok(
+    !actionsEl.children.some(c => c?.props?.className === 'roam-pending'),
+    '没有 pending 时不该出现确认区',
+  )
+})
+
+test('确认时必须带上预览时发的 token —— 否则预览只是装饰', async () => {
+  const src = read('client.js')
+  // 这条只能在源码层断言：真正的「确认的是看过的哪一份」由宿主路由保证，
+  // 界面的责任是把 token 原样带回去。漏了它，宿主只能拒绝所有确认。
+  assert.match(src, /step:\s*'confirm'/, '确认请求要显式标出 step')
+  assert.match(src, /token:\s*pending\.token|token:\s*prepared\.token/, '确认必须回传 token')
+})
+
+test('推送与拉取都走「预览→确认」两段，没有一键直发', async () => {
+  const src = read('client.js')
+  assert.match(src, /step:\s*'prepare'/, '要有预览阶段')
+  // 预览后按钮变成「确认」，而不是再点一次就执行
+  assert.match(src, /pending/, '预览结果要落到待确认状态里')
+  assert.ok(
+    !/onClick:\s*\(\)\s*=>\s*request\([^)]*['"]?confirm/.test(src),
+    '按钮不得直接触发确认',
+  )
+})
