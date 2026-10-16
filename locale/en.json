@@ -41,6 +41,7 @@
     "clean": "In sync with this machine.",
     "diff": "{n} changes on the cloud are waiting to be pulled.",
     "review": "Check the differences above; nothing is written until you confirm.",
+    "needsProfile": "This machine has several profiles — pick the one to sync in the first block.",
     "error": "The operation failed. Try again."
   },
   "busy": {
@@ -87,7 +88,10 @@
   },
   "preview": {
     "title": "Preview",
-    "empty": "Nothing yet. Use “Export to file” below to see what would be taken."
+    "empty": "Nothing yet. Use “Export to file” below to see what would be taken.",
+    "pickTitle": "Choose the profile to sync",
+    "pickHint": "This machine has {names}. Only the selected one is synced; the rest stay as they are.",
+    "pickSaved": "Selected {name}."
   },
   "actions": {
     "title": "Actions"

@@ -144,6 +144,32 @@ test('status 带上 profile 与导出目录，界面不必自己拼路径', asyn
   assert.equal(body.exportRoot, '/home/u/.dsh/settings-roam/export')
 })
 
+test('本机现状读不到时仍然回 200 —— 否则整节内容消失，用户连去选 profile 的地方都看不见', async () => {
+  const boom = new Error('发现多个 profile（installcheck、web），无法确定同步哪一个。请显式指定 profile 名。')
+  const d = deps({
+    prepareInspect: async () => { throw boom },
+    describeProfile: () => ({
+      name: null,
+      resolved: false,
+      reason: boom.message,
+      profiles: ['installcheck', 'web'],
+      needsChoice: true,
+    }),
+  })
+  const handlers = createRouteHandlers(d)
+
+  const res = await handlers.fetch(get(ROUTES.status))
+  const body = await res.json()
+
+  assert.equal(res.status, 200, '这不是请求失败，是一种要展示给对方的状态')
+  assert.equal(body.ok, true, 'ok 为 true 界面才会去渲染这一节')
+  assert.equal(body.inspectError, boom.message, '原因要原样带给界面')
+  assert.equal(body.total, 0, '读不到就给零，而不是让界面拿到 undefined 去算')
+  assert.deepEqual(body.editableEntries, [], '可编辑条目只是便利功能，不该把整节状态一起带崩')
+  // 候选名单要带出去 —— 界面靠它把名字摆出来让人点
+  assert.deepEqual(body.profile.profiles, ['installcheck', 'web'])
+})
+
 // ─── 预览 → 确认 的两段式（界面决策 U1）────────────────────────────────
 
 test('没预览过就确认推送：拒绝，并告诉用户先预览', async () => {

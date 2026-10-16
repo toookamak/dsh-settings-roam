@@ -130,6 +130,7 @@ window.__ModuleLoader__.load({
           clean: '已与本机一致。',
           diff: '云端有 {n} 项变化待拉取。',
           review: '请核对上面的差异，确认后才会真正写入。',
+          needsProfile: '这台机器上有多个 profile，在第一块里选一个要同步的。',
           error: '操作失败，请重试。',
         },
         busy: {
@@ -177,6 +178,9 @@ window.__ModuleLoader__.load({
         preview: {
           title: '预览',
           empty: '还没有内容。点下面的「导出到文件」，先看看会带走什么。',
+          pickTitle: '先选一个要同步的 profile',
+          pickHint: '这台机器上有 {names}。选中的那个才会被同步，其余的保持原样。',
+          pickSaved: '已选 {name}。',
         },
         actions: { title: '操作' },
         overview: { title: '这次同步了什么' },
@@ -226,6 +230,7 @@ window.__ModuleLoader__.load({
           clean: 'In sync with this machine.',
           diff: '{n} changes on the cloud are waiting to be pulled.',
           review: 'Check the differences above; nothing is written until you confirm.',
+          needsProfile: 'This machine has several profiles — pick the one to sync in the first block.',
           error: 'The operation failed. Try again.',
         },
         busy: {
@@ -273,6 +278,9 @@ window.__ModuleLoader__.load({
         preview: {
           title: 'Preview',
           empty: 'Nothing yet. Use \u201cExport to file\u201d below to see what would be taken.',
+          pickTitle: 'Choose the profile to sync',
+          pickHint: 'This machine has {names}. Only the selected one is synced; the rest stay as they are.',
+          pickSaved: 'Selected {name}.',
         },
         actions: { title: 'Actions' },
         overview: { title: 'What this sync covered' },
@@ -440,6 +448,9 @@ window.__ModuleLoader__.load({
       '.roam-skip{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-2)}',
       '.roam-skip-name{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
       '.roam-skip-reason{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
+      '.roam-pick{display:flex;flex-direction:column;gap:6px}',
+      '.roam-pick-title{margin:0;font-size:13px;line-height:20px;font-weight:500;color:var(--dsw-alias-label-secondary)}',
+      '.roam-pick-options{display:flex;flex-wrap:wrap;gap:8px}',
       '.roam-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
       '.roam-pending-text{margin:0;font-size:13px;line-height:20px}',
       '.roam-pending-actions{display:flex;gap:8px}',
@@ -569,6 +580,8 @@ window.__ModuleLoader__.load({
           return { dot: 'error', tone: 'error', text: state.message ?? t('status.error') }
         case 'needs-config':
           return { dot: 'warning', tone: 'warning', text: t('status.needsConfig') }
+        case 'needs-profile':
+          return { dot: 'warning', tone: 'warning', text: t('status.needsProfile') }
         case 'empty-cloud':
           return { dot: 'idle', tone: 'idle', text: t('status.emptyCloud') }
         case 'has-diff':
@@ -937,16 +950,80 @@ window.__ModuleLoader__.load({
      * 而内容出现在上方一格——先把位置定在按钮的正上方，才不用回头去找。
      * 这也正是「点了导出像是没返回结果」的成因。
      */
-    function PreviewBlock({ state, actions, t = makeT('zh') }) {
+    /**
+     * 多 profile 时的选择器。
+     *
+     * 原先这种情况只会抛一句「请显式指定 profile 名」——用户既不知道名字该怎么拼，
+     * 也不知道去哪儿填。而候选名单本来就在手上（数据根目录下就是那几个目录），
+     * 摆出来让人点一下就行。
+     */
+    function ProfilePicker({ profile, form, t = makeT('zh'), onSaved }) {
+      const names = Array.isArray(profile?.profiles) ? profile.profiles : []
+      const [note, setNote] = React.useState(null)
+      if (names.length === 0) return null
+      const current = profile?.name ?? ''
+      const pick = async (name) => {
+        setNote({ tone: 'saving' })
+        try {
+          const accepted = form ? await form.set('profileName', name) : false
+          if (accepted === false) {
+            setNote({ tone: 'bad', text: t('config.failed') })
+            return
+          }
+          setNote({ tone: 'ok', text: t('preview.pickSaved', { name }) })
+          onSaved?.()
+        } catch (error) {
+          setNote({ tone: 'bad', text: failureNote(error?.message ?? '', t) })
+        }
+      }
+      const noteText = note?.text ?? (note?.tone === 'saving' ? t('config.saving') : null)
+      return h(
+        'div',
+        { className: 'roam-pick' },
+        h('p', { className: 'roam-pick-title' }, t('preview.pickTitle')),
+        h('p', { className: 'roam-field-hint' }, t('preview.pickHint', { names: names.join('\u3001') })),
+        h(
+          'div',
+          { className: 'roam-pick-options' },
+          names.map(name => h(
+            Button,
+            {
+              key: name,
+              size: 'sm',
+              variant: current === name ? 'primary' : 'outline',
+              onClick: () => { void pick(name) },
+            },
+            name,
+          )),
+        ),
+        noteText
+          ? h(
+            'p',
+            {
+              className: 'roam-note',
+              'data-tone': note?.tone === 'ok' ? 'ok' : note?.tone === 'bad' ? 'bad' : undefined,
+            },
+            noteText,
+          )
+          : null,
+      )
+    }
+
+    function PreviewBlock({ state, actions, t = makeT('zh'), form }) {
       const skipped = state?.skipped ?? []
       const hasOverview = Boolean(state?.overview)
+      const profile = state?.status?.profile
+      // 两种情形都要给选择器：多 profile 还没选（这一节读不出内容），
+      // 以及已经选了但机器上还有别的（换一个不用去翻设置）。
+      const needsPick = state?.kind === 'needs-profile' || profile?.needsChoice === true
       return h(
         'div',
         { className: 'roam-card roam-preview', id: 'roam-preview' },
         h('p', { className: 'roam-card-title' }, t('preview.title')),
+        needsPick ? h(ProfilePicker, { profile, form, t, onSaved: actions?.onSaved }) : null,
         h(Overview, { state, actions, t }),
         // 还没有任何内容时也要有一条说明，否则这一块是一个没有落款的空壳。
-        hasOverview ? null : h('p', { className: 'roam-empty' }, t('preview.empty')),
+        hasOverview || needsPick ? null : h('p', { className: 'roam-empty' }, t('preview.empty')),
         skipped.length > 0
           ? h(
             'div',
@@ -1025,7 +1102,7 @@ window.__ModuleLoader__.load({
           h('p', { className: 'roam-intro' }, t('intro')),
         ),
         h(StatusLine, { state, t }),
-        h(PreviewBlock, { state, actions, t }),
+        h(PreviewBlock, { state, actions, t, form: state?.form }),
         h(ActionBlock, { state, actions, t }),
         state?.form ? h(ConfigCard, { form: state.form, t, onSaved: actions?.onSaved }) : null,
         h(EditCard, { entry: state?.editable, t, onEdit: actions?.onEdit }),
@@ -1068,6 +1145,10 @@ window.__ModuleLoader__.load({
      * @returns {object}
      */
     function stateFrom(status) {
+      // 读不到本机现状（最常见的是多 profile 还没选）不是「出错了」，
+      // 而是一件要用户做选择的事。当成 error 会让整节内容消失，
+      // 连让他去选的地方都没有。
+      if (status.inspectError) return { kind: 'needs-profile', status }
       if (!status.configured) return { kind: 'needs-config', status }
       if (status.sharedCount === 0) return { kind: 'empty-cloud', status }
       return { kind: 'clean', status }
@@ -1409,6 +1490,7 @@ window.__ModuleLoader__.load({
       Section,
       StatusLine,
       ConfigCard,
+      ProfilePicker,
       failureNote,
       describeNote,
       EditCard,

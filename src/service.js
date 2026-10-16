@@ -984,10 +984,26 @@ async function crossCheck() {
      * @returns {{name: string|null, resolved: boolean, reason: string|null}}
      */
     describeProfile() {
+      // 候选名单一并带出去：多 profile 时界面要能让用户直接选一个，
+      // 而不是把「请显式指定 profile 名」这句话丢给用户，让他自己去找名字怎么拼。
+      let profiles = []
       try {
-        return { name: resolveProfileName(), resolved: true, reason: null }
+        profiles = listProfiles(dshRoot, { readdirSync, existsSync })
+      } catch {
+        profiles = []
+      }
+      try {
+        return { name: resolveProfileName(), resolved: true, reason: null, profiles, needsChoice: false }
       } catch (error) {
-        return { name: explicitProfile(), resolved: false, reason: String(error?.message ?? error) }
+        return {
+          name: explicitProfile(),
+          resolved: false,
+          reason: String(error?.message ?? error),
+          profiles,
+          // 有候选才叫「要选一个」；一个都没有时（还没启动过 DSH）
+          // 给一组空按钮只会让人更困惑。
+          needsChoice: profiles.length > 1,
+        }
       }
     },
 

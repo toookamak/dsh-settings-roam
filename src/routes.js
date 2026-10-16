@@ -160,7 +160,16 @@ export function createRouteHandlers(deps) {
 
   /** 本机现状。只读，未配置云端时也能用。 */
   const status = async () => {
-    const inspected = await service.prepareInspect()
+    // 读不到本机现状不是「请求失败」，而是一种要展示给对方的状态：
+    // 最常见的一种是多 profile 还没选。把它变成 500 会让整节内容消失，
+    // 用户连去设置里填 profile 名的地方都看不见了。
+    let inspected = null
+    let inspectError = null
+    try {
+      inspected = await service.prepareInspect()
+    } catch (error) {
+      inspectError = messageOf(error)
+    }
     return {
       // ok 是所有响应的统一约定：界面只看这一个字段判断成败，
       // 缺了它界面会把一次成功当成失败（request() 会抛「请求失败」）。
@@ -172,16 +181,18 @@ export function createRouteHandlers(deps) {
       // 导入目录里有没有可用的包。绝不抛错，所以「还没导出过」也能照常显示。
       importSource: service.describeImportSource(),
       profile: service.describeProfile(),
-      patchExists: inspected.patchExists,
-      total: inspected.total,
-      sharedCount: inspected.shared.length,
-      machineCount: inspected.machine.length,
-      excludedCount: inspected.excludedIds.length,
-      skillCount: inspected.skills.length,
-      skillCheck: inspected.skillCheck,
+      inspectError,
+      patchExists: inspected?.patchExists ?? null,
+      total: inspected?.total ?? 0,
+      sharedCount: inspected?.shared?.length ?? 0,
+      machineCount: inspected?.machine?.length ?? 0,
+      excludedCount: inspected?.excludedIds?.length ?? 0,
+      skillCount: inspected?.skills?.length ?? 0,
+      skillCheck: inspected?.skillCheck ?? null,
       // 可编辑的公共条目。列表为空时界面不渲染编辑区，
-      // 而不是给一个点不动的空壳。
-      editableEntries: service.listEditableEntries(),
+      // 而不是给一个点不动的空壳。读不到（例如还没选 profile）时给空列表：
+      // 它只是个可选的便利功能，不该把整节状态一起带崩。
+      editableEntries: inspectError === null ? service.listEditableEntries() : [],
     }
   }
 

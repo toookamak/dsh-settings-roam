@@ -119,6 +119,7 @@ test('两套语言文件都齐，且 meta 字段一致', () => {
 // 需要「跨渲染才成立」的断言一律退回源码层，不在这层伪造。
 
 let hookState = []
+let lastStore = null
 let hookIndex = 0
 
 const REACT = {
@@ -212,12 +213,28 @@ function render(el) {
     if (HOST_COMPONENTS.has(el.type)) return { ...el }
     hookState = []
     hookIndex = 0
+    lastStore = hookState
     return render(el.type(el.props ?? {}))
   }
   return {
     ...el,
     children: (el.children ?? []).map(render).filter(c => c !== null && c !== undefined),
   }
+}
+
+/**
+ * 用同一份 hooks 再渲染一次。
+ *
+ * 假渲染器不会因为 setState 自己重画（它没有调度器），所以「状态变了之后界面
+ * 变成什么样」只能手动再渲染一遍：状态本身是真的存下来的，重画时按槽位取回。
+ * @param {object} el 第一次渲染用的那个元素
+ * @returns {object}
+ */
+function rerender(el) {
+  if (el === null || el === undefined || typeof el.type !== 'function') return el
+  hookState = lastStore
+  hookIndex = 0
+  return render(el.type(el.props ?? {}))
 }
 
 const isButton = el => el?.type === PRIMITIVES.Button
@@ -960,6 +977,74 @@ test('还没有内容时「预览」块也要有落款 —— 不留一个空壳
   const empty = byClass(preview, 'roam-empty')
   assert.ok(empty, '没有内容时要有一句说明，而不是空着')
   assert.ok(empty.children[0].includes('导出到文件'), '要指明下一步点哪里')
+})
+
+test('多 profile 时把候选摆出来让人点，而不是丢一句「请显式指定 profile 名」', async () => {
+  const exported = await loadClient('picker')
+  const form = fakeForm()
+  const el = render(exported.ProfilePicker({
+    profile: { name: '', resolved: false, profiles: ['installcheck', 'web'], needsChoice: true },
+    form,
+    t: exported.makeT('zh'),
+  }))
+  const buttons = (findByClass(el, 'roam-pick-options').children ?? []).filter(isButton)
+  assert.deepEqual(
+    buttons.map(b => b.children[0]),
+    ['installcheck', 'web'],
+    '候选名字要原样摆出来 —— 让人自己拼名字是这一处最没必要的负担',
+  )
+  assert.ok(findByClass(el, 'roam-field-hint').children[0].includes('installcheck'), '要说清是在哪些名字里选')
+
+  buttons[1].props.onClick()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(form.calls.set, [['profileName', 'web']], '点一下就是替用户填进配置，不用他去设置里手打')
+})
+
+test('选 profile 被宿主拒绝时如实说，不显示成选好了', async () => {
+  const exported = await loadClient('picker-refused')
+  const form = fakeForm({ accept: false })
+  // 这里要的是「组件元素」而不是调用结果：前者才会走渲染、才会有 hooks 可用，
+  // 后者已经把树算完了，setState 没有地方落。
+  const picker = {
+    type: exported.ProfilePicker,
+    props: {
+      profile: { name: '', profiles: ['a', 'b'], needsChoice: true },
+      form,
+      t: exported.makeT('zh'),
+    },
+  }
+  const el = render(picker)
+  const buttons = (findByClass(el, 'roam-pick-options').children ?? []).filter(isButton)
+  buttons[0].props.onClick()
+  await new Promise(resolve => setImmediate(resolve))
+  const after = rerender(picker)
+  const note = findByClass(after, 'roam-note')
+  assert.ok(note, '被拒绝要有可见的落款')
+  assert.ok(note.children[0].includes('没有保存成功'), `要如实说没保存成功：${note.children[0]}`)
+})
+
+test('一个候选都没有时不摆选择器 —— 摆一组空按钮更让人困惑', async () => {
+  const exported = await loadClient('picker-single')
+  const el = render({
+    type: exported.ProfilePicker,
+    props: { profile: { name: '', profiles: [], needsChoice: false }, form: fakeForm(), t: exported.makeT('zh') },
+  })
+  assert.equal(el, null)
+})
+
+test('读不到本机现状是多 profile 未选，不是「出错了」', async () => {
+  const exported = await loadClient('needs-profile')
+  const status = {
+    configured: true,
+    inspectError: '发现多个 profile（installcheck、web），无法确定同步哪一个。请显式指定 profile 名。',
+    profile: { profiles: ['installcheck', 'web'], needsChoice: true },
+  }
+  const section = render(exported.Section({ state: { kind: 'needs-profile', status, form: fakeForm() }, actions: {} }))
+  const line = render(exported.StatusLine({ state: { kind: 'needs-profile', status } }))
+  const text = String(line.children.find(c => c?.type === 'span')?.children?.[0] ?? '')
+  assert.ok(text.includes('选一个'), `要说清这是一件要用户做选择的事：${text}`)
+  // 选择器就摆在这一节里，不该只在错误信息里提一句
+  assert.ok(findByClass(section, 'roam-pick'), '预览块里要有候选可点')
 })
 
 test('设置项排在预览与操作之后 —— 每天要看的不该被五个输入框挤下去', async () => {
