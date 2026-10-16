@@ -110,6 +110,9 @@ export function createRouteHandlers(deps) {
     buildPushOverview,
     buildPullOverview,
     buildImportOverview,
+    // 「本机现在有什么」的概述构建器。缺省为 null：它是 status 的附加信息，
+    // 没传也不该让整条只读路径崩掉（单测里就常常只关心字段本身）。
+    buildInspectOverview = null,
     now = () => new Date(),
   } = deps
 
@@ -183,6 +186,14 @@ export function createRouteHandlers(deps) {
       importSource: service.describeImportSource(),
       profile: service.describeProfile(),
       inspectError,
+      // 「这台机器上有什么」的概述，与状态取自同一次读取：用户选完 profile
+      // 第一件想确认的事就是「这是我要备份的那份吗、配了几家供应商、装了几个
+      // 插件」。原先这些数只在点过导出/推送之后才出现，预览区因此一直是空的。
+      // 读不到本机现状时给 null，让界面照旧走「还没选 profile」那条路，
+      // 而不是渲染一份凭空的清单。
+      overview: inspected !== null && typeof buildInspectOverview === 'function'
+        ? buildInspectOverview(inspected)
+        : null,
       patchExists: inspected?.patchExists ?? null,
       total: inspected?.total ?? 0,
       sharedCount: inspected?.shared?.length ?? 0,

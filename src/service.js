@@ -89,6 +89,30 @@ export function collectApiKeyRefs(rows) {
 }
 
 /**
+ * 收集公共线上的模型供应商名。
+ *
+ * 「这台机器配了几家供应商、都是谁」是用户在把配置推出去之前第一件想确认的事
+ * （用户原话：想看到概述，比如配置了几个模型供应商）。
+ *
+ * 只数公共条目：本机专属条目里的 provider 不会进云端，把它们算进来会让
+ * 概述与实际带走的内容对不上——概述失真比没有概述更糟。
+ *
+ * @param {object[]} rows
+ * @returns {string[]}
+ */
+export function collectProviderNames(rows) {
+  const names = []
+  for (const row of rows) {
+    const providers = row?.config?.providers
+    if (providers === undefined || providers === null || typeof providers !== 'object') continue
+    for (const name of Object.keys(providers)) {
+      if (!names.includes(name)) names.push(name)
+    }
+  }
+  return names.sort()
+}
+
+/**
  * 建一个同步服务。
  *
  * backend 可以是实例，也可以是一个返回实例的函数（或 undefined）。
@@ -674,6 +698,19 @@ async function crossCheck() {
         skillCheck = null
       }
 
+      // 概述所需的三个数，各说一件事：配了几家供应商、装了几个技能、
+      // 装了几个插件。它们都不是「同步内容」本身，而是用户判断
+      // 「这是不是我要备份的那份」时的凭据。
+      const providerNames = collectProviderNames(shared)
+      // 技能按目录名去重：skills 是文件级记录，一个技能可能横跨好几个文件，
+      // 直接数记录会把「一个技能」报成「五个」。
+      const skillNames = [...new Set(
+        skills.map(record => String(record?.relPath ?? '').split('/')[0]).filter(Boolean),
+      )].sort()
+      // 插件名单取不到时是 null，不是空数组——两个「没有」必须区分
+      // （collectPluginNames 的说明里写了为什么）。
+      const bundles = await collectPluginNames()
+
       return {
         patchFile: patchFile(),
         patchExists,
@@ -685,6 +722,9 @@ async function crossCheck() {
         excludedIds: excluded.map(row => row.id).filter(Boolean),
         skills,
         skillCheck,
+        providers: { count: providerNames.length, names: providerNames },
+        skillNames,
+        bundles,
       }
     },
 

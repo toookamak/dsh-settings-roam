@@ -552,6 +552,56 @@ test('显式指定 profileName 时按指定的读，不受其它 profile 干扰'
   rmSync(root, { recursive: true })
 })
 
+test('prepareInspect 给出概述要的三个数：供应商、技能名、插件名单', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const service = createSyncService({
+    backend: fakeBackend(),
+    workDir,
+    dshRoot,
+    skillsRoot,
+    pluginManager: () => ({
+      async listBundles() {
+        return [
+          { name: '@deepseek-ai/dsh-foo', official: true, availability: 'installation' },
+          { name: 'someone-bar', official: false, availability: 'profile' },
+        ]
+      },
+    }),
+  })
+
+  const info = await service.prepareInspect()
+
+  assert.equal(info.providers.count, 1, '概述要能说出配了几家供应商')
+  assert.deepEqual(info.providers.names, ['demo'])
+  assert.deepEqual(info.skillNames, ['demo'], '技能按目录名算，一个目录就是一个技能')
+  assert.deepEqual(
+    info.bundles,
+    { official: ['@deepseek-ai/dsh-foo'], thirdParty: ['someone-bar'] },
+    '插件名单与推送时写进云端的必须同源',
+  )
+  rmSync(root, { recursive: true })
+})
+
+test('供应商只数公共线上的 —— 本机专属条目里的供应商不会被备份走', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  // 本机专属条目自己也带 providers。概述若把它算进去，用户会以为那家
+  // 供应商会被备份，而实际上它留在本机——概述失真比没有概述更糟。
+  writeFileSync(
+    join(dshRoot, 'profiles', 'web', 'cordis.patch.yml'),
+    `${PATCH}- id: agent-default-model\n  config:\n    providers:\n      local-only:\n        apiKeyEnv: LOCAL_KEY\n`,
+  )
+  const service = createSyncService({ backend: fakeBackend(), workDir, dshRoot, skillsRoot })
+
+  const info = await service.prepareInspect()
+
+  assert.deepEqual(info.providers.names, ['demo'])
+  assert.ok(
+    info.machine.some(row => row.id === 'agent-default-model'),
+    '它确实被归到了本机线，因此不该出现在概述的供应商里',
+  )
+  rmSync(root, { recursive: true })
+})
+
 test('一个 profile 都没有时给出可行动的说明', async () => {
   const root = tmpDir('svc-empty-')
   const dshRoot = join(root, '.dsh')

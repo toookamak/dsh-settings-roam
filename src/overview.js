@@ -29,17 +29,22 @@ export function buildPushOverview(plan, options = {}) {
 
   const summary = plan.summary ?? {}
   const exported = plan.exported ?? null
+  const plugins = countPlugins(files)
 
   const stats = [
     { label: '公共配置', value: countByPrefix(files, 'config/profile.patch.yml') },
     { label: '技能', value: countByPrefix(files, 'skills/') },
-    { label: '插件', value: countPlugins(files) },
+    // 与「本机现状」同一个口径：只数自己装的，DSH 自带的在 meta 里。
+    { label: '插件', value: plugins === null ? '—' : plugins.thirdParty },
   ]
 
   const meta = []
   const at = options.now ?? new Date()
   meta.push(formatTime(at))
   if (plan.generatedBy) meta.push(`来自 ${plan.generatedBy}`)
+  if (plugins !== null && plugins.official > 0) {
+    meta.push(`插件名单共 ${plugins.total} 项（其中 DSH 自带 ${plugins.official} 项）`)
+  }
 
   const diffTotal = (summary.add ?? 0) + (summary.modify ?? 0) + (summary.delete ?? 0)
   if (diffTotal > 0) {
@@ -53,6 +58,85 @@ export function buildPushOverview(plan, options = {}) {
     location: exported?.exportPath ?? null,
     total: files.length,
   }
+}
+
+/**
+ * 从本机现状构建概述：这台机器上准备带走的东西。
+ *
+ * 与其它三个概述的关键差别：它不来自任何一次动作，而是「一打开就该有」的
+ * 常态视图。用户选完 profile 后第一件想确认的事就是「这是我要备份的内容吗」，
+ * 这个答案不能藏在「先点一次导出」后面——那正是原先预览区一直空着的原因：
+ * 三个动作各自都有概述，但没有任何一个会在用户还没动作时先说话。
+ *
+ * 每个数字都配一条能核对的下落：公共条目留在哪个文件、有几个技能、
+ * 哪些项被留在本机。用户据此判断要不要动那个按钮，而不是盲点。
+ *
+ * @param {object|null} inspect - prepareInspect 的返回
+ * @param {{now?: Date}} [options]
+ * @returns {object|null} 无现状可读时返回 null
+ */
+export function buildInspectOverview(inspect, options = {}) {
+  if (inspect === null || inspect === undefined) return null
+
+  const shared = inspect.shared?.length ?? 0
+  const machine = inspect.machine?.length ?? 0
+  const excluded = inspect.excludedIds?.length ?? 0
+  // skills 是文件级记录，一个技能可能有多个文件。两个数字分开给：
+  // 「装了几个技能」与「会同步几个文件」是两件事，混成一个数会答错其中一件。
+  const skillFiles = inspect.skills?.length ?? 0
+  const skillCount = inspect.skillNames?.length
+    ?? new Set((inspect.skills ?? []).map(r => String(r?.relPath ?? '').split('/')[0])).size
+  const plugins = summarizeBundles(inspect.bundles)
+
+  const stats = [
+    { label: '模型供应商', value: inspect.providers?.count ?? 0 },
+    // 取不到插件名单时给一个明确的占位符，不能给 0：
+    // 0 会被读成「这台机器一个插件都没装」，而事实是我们没问到。
+    // 数的是自己装的：DSH 自带的那批在 meta 里单独交代。
+    { label: '已装插件', value: plugins === null ? '—' : plugins.thirdParty },
+    { label: '公共配置项', value: shared },
+    { label: '技能', value: skillCount },
+  ]
+
+  const meta = [`读取于 ${formatTime(options.now ?? new Date())}`]
+  if (skillFiles > 0) meta.push(`技能共 ${skillFiles} 个文件`)
+  if (machine > 0) meta.push(`留在本机 ${machine} 项`)
+  if (excluded > 0) meta.push(`不同步 ${excluded} 项`)
+  if (plugins === null) {
+    meta.push('插件名单暂不可用（没问到插件管理服务）')
+  } else if (plugins.official > 0) {
+    // 名单里也有 DSH 自带的 bundle。它们不进主数字，但不能不说——
+    // 否则用户核对名单时会以为备份漏了东西。
+    meta.push(`插件名单共 ${plugins.total} 项（其中 DSH 自带 ${plugins.official} 项）`)
+  }
+
+  return {
+    title: '这台机器上可同步的内容',
+    stats,
+    meta,
+    // 配置文件的绝对路径：用户想逐字核对自己配了什么时，去这里看。
+    location: inspect.patchFile ?? null,
+    total: shared,
+  }
+}
+
+/**
+ * 插件名单的构成；名单取不到时返回 null（与「0 个插件」区分）。
+ *
+ * 为什么官方与第三方要分开数：界面上的「已装插件」是给用户核对的，
+ * 他数的是自己装的那些。DSH 自带的 bundle 也在名单里——名单要如实记录
+ * 这台机器装载了什么——但混进同一个数字会让他觉得「我没装这么多」：
+ * 装 9 个插件的人看到的却是 19。所以主数字只数自己装的，
+ * 自带的那批在 meta 里单独交代。
+ *
+ * @param {{official?: string[], thirdParty?: string[]}|null|undefined} bundles
+ * @returns {{official: number, thirdParty: number, total: number}|null}
+ */
+function summarizeBundles(bundles) {
+  if (bundles === null || bundles === undefined) return null
+  const official = bundles.official?.length ?? 0
+  const thirdParty = bundles.thirdParty?.length ?? 0
+  return { official, thirdParty, total: official + thirdParty }
 }
 
 /**
@@ -127,15 +211,23 @@ function countByPrefix(files, prefix) {
   return files.filter(f => f.path === prefix || f.path.startsWith(prefix)).length
 }
 
+/**
+ * 包里的插件名单构成；名单不在文件里、或内容坏掉时返回 null。
+ * 与 summarizeBundles 同一个口径：官方与第三方分开给。
+ * @param {{path: string, content: string}[]} files
+ * @returns {{official: number, thirdParty: number, total: number}|null}
+ */
 function countPlugins(files) {
   const file = files.find(f => f.path === 'config/bundles.json')
-  if (!file) return 0
+  if (!file) return null
   try {
     const parsed = JSON.parse(file.content)
-    return (parsed.official?.length ?? 0) + (parsed.thirdParty?.length ?? 0)
+    const official = parsed.official?.length ?? 0
+    const thirdParty = parsed.thirdParty?.length ?? 0
+    return { official, thirdParty, total: official + thirdParty }
   } catch {
     // 名单内容坏了不该让概述整体失败——它只是一条统计。
-    return 0
+    return null
   }
 }
 

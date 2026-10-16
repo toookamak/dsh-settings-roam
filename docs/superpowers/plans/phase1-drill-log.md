@@ -565,3 +565,86 @@ DSH 的安装流程在 pnpm 成功之后会对比 profile 清单的前后差异�
   `/home/tokamak/.dsh/profiles/web` 的依赖，那是用户正在用的 profile。真装一次的代价是重启，
   留给用户实装时验证。
 - **不做后台自动检查。** 没有定时器、不问网络——只在你点了按钮的时候问一次。
+
+## 十八、预览区不再空着：本机现状概述前置
+
+### 18.1 用户看到的问题
+
+实装后的第一句反馈是：「我选了一个配置文件，为什么预览里是空的。」
+
+追溯：界面「预览」块只渲染 `state.overview`，而它只在导出／导入／推送／拉取四类动作的响应里产生
+（`client.js` 的 `beginExport`、`begin`）。profile 选择器（`ProfilePicker`）点一下只写配置、不读任何东西。
+于是顺序成了：用户要先盲点一次「导出」，才能知道「这台机器上有什么」——而他真正想问的正是这句话。
+功能齐全，但最基本的问题没人回答。
+
+### 18.2 修法：让只读状态顺带把概述带出来
+
+宿主侧早就读得出这些数（`service.prepareInspect()`，CLI 的 `inspect` 就是它），缺的只是把它接到界面上的一根线。
+**没有新增路由**，因为 `status` 本来就在调 `prepareInspect`：
+
+| 改动 | 位置 |
+|---|---|
+| 采集公共线上的供应商名 | `src/service.js` 新增 `collectProviderNames(rows)`；`prepareInspect()` 返回值加 `providers`／`skillNames`／`bundles` |
+| 把现状折成概述 | `src/overview.js` 新增 `buildInspectOverview(inspect, options)` |
+| 随状态一起下发 | `src/routes.js` 的 `status()` 增加 `overview` 字段（`buildInspectOverview` 从 `deps` 注入，缺省 null） |
+| 接进 state | `client.js` 的 `stateFrom(status)` 把 `status.overview` 带进 `state` |
+
+三条刻意的取舍：
+
+1. **供应商只数公共线上的。** 本机专属条目里也会有 `providers`，算进来，概述就会宣称一家不会被备份的供应商——
+   概述失真比没有概述更糟。有测试钉住（`test/service.test.js`）。
+2. **插件名单取不到时显示「—」，不显示 0。** 与「名单是空的」必须区分，这条原则在决策 8 里已经写过一次
+   （`collectPluginNames` 返回 null）：0 会被读成「这台机器一个插件都没装」。
+3. **技能数与技能文件数分开说。** `scanSkills` 给的是文件级记录，一个技能可能横跨几个文件：
+   概述报技能数（目录名去重），元信息里另说「技能共 N 个文件」。
+
+### 18.3 验收
+
+新增 10 个用例（`test/overview.test.js` 6 个、`test/service.test.js` 2 个、`test/routes.test.js` 2 个）。
+`node --test`：449 用例、419 通过、30 失败——失败的那 30 项与本轮之前逐条相同，
+全部是 Windows 平台适配（入口判定／行尾／路径语义／权限位），没有一项来自这次改动。
+
+对真实数据根跑一次（`prepareInspect()` + `buildInspectOverview()`，desktop profile）：
+
+| 概述项 | 值 |
+|---|---|
+| 模型供应商 | 3（`apideepseek`、`opencode-go`、`xiuxian`） |
+| 已装插件 | 纯脚本里取不到 `pluginManager`，显示「—」；在真实 DSH 进程里由 `ctx.inject` 取到 |
+| 公共配置项 | 1（`llm-pi-ai`） |
+| 技能 | 0（这台机器的 `.dsh` 下没有 skills 目录） |
+| 留在本机／不同步 | 5 项／6 项 |
+| 配置文件 | `C:\Users\maxxi\.dsh\profiles\desktop\cordis.patch.yml` |
+
+### 18.4 教训
+
+**「打开就能看见」与「点一下才有」是两种功能。** 动作型概述回答「我这次操作带走了什么」，
+现状型概述回答「这台机器上有什么」——后者的正确触发时机是「打开这一节」，不是任何一次点击。
+把两者塞进同一个字段、只让动作去填它，就会长成本轮这一幕：一切都已实现，而用户问的最基本的那句没人回答。
+
+### 18.5 用户第二次反馈：插件数字比他装的翻了一倍
+
+推送成功后用户的下一句是：「我发现插件数量不对，我只装了 9 个插件。」界面报 19。
+
+`listBundles()` 返回的是这台机器**装载**的全部包，其中 10 个是 DSH 自带的。
+概述把 `official.length + thirdParty.length` 加起来当作「已装插件」，于是「自己装了 9 个」显示成 19——
+用户拿这个数字对自己的插件列表，只会以为插件多装了一倍。名单本身没错（备份要如实记录这台机器装载了什么），
+错的是把这个总数摆在「已装插件」这一格。
+
+修法是拆开说：主数字只数**自己装的**，自带那批不消失、也不并进数字，而是在下面单独交代一句。
+
+| 改动 | 位置 |
+|---|---|
+| 计数改名并返回三样 | `src/overview.js` 的 `countPluginNames` → `summarizeBundles(bundles)`，返回 `{ official, thirdParty, total }`；`countPlugins(files)` 同形 |
+| 现状概述 | `buildInspectOverview()` 的「已装插件」取 `thirdParty`；`official > 0` 时补一条 `插件名单共 N 项（其中 DSH 自带 M 项）` |
+| 动作概述 | `buildPushOverview()` 的「插件」同样只数第三方，并同样交代 |
+| 文档 | `README.md` 预览块两处说明（第 124、146 行） |
+
+连带修正三处：包里的名单**读不懂**（JSON 坏掉）时从显示 0 改成显示「—」；没有自带插件时不加那句交代
+（零项自带是噪音）；测试里原本钉着「插件数 = 官方 + 第三方」的断言改为只看第三方，另加一条钉住「没有自带就不交代」。
+
+`node --test`：450 用例、420 通过、30 失败（仍是同一批 Windows 平台项）。
+
+**一次判断失误值得记下来。** 18.2 的取舍二写了「插件名单取不到时显示「—」，不显示 0」，
+但当时只覆盖「取不到名单」这一种情况（`collectPluginNames` 返回 null）；名单**取到了却读不懂**
+（包里的 `bundles.json` 坏掉）走的是另一条路，仍然显示 0。同一个原则在两处各写了一遍，
+只有一处写对。这次一并收口到 `summarizeBundles`：读不出来就说读不出来，能读出来才报数。

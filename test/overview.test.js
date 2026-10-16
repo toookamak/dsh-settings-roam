@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildPushOverview, buildPullOverview, buildImportOverview } from '../src/overview.js'
+import { buildPushOverview, buildPullOverview, buildImportOverview, buildInspectOverview } from '../src/overview.js'
 
 const FILES = [
   { path: 'config/profile.patch.yml', content: '- id: llm-pi-ai\n' },
@@ -20,7 +20,11 @@ test('推送概述给出三类计数，各对应一条真实来源', () => {
   const byLabel = Object.fromEntries(o.stats.map(s => [s.label, s.value]))
   assert.equal(byLabel['公共配置'], 1)
   assert.equal(byLabel['技能'], 2, '一个技能目录算一个技能，不是按文件数')
-  assert.equal(byLabel['插件'], 3, '官方 2 + 第三方 1，合并成一个数字')
+  assert.equal(byLabel['插件'], 1, '只数自己装的；DSH 自带的那批不进这个数字')
+  assert.ok(
+    o.meta.some(m => m.includes('插件名单共 3 项（其中 DSH 自带 2 项）')),
+    '自带的那批不能就这么消失，要在 meta 里交代',
+  )
 })
 
 test('概述包含时间与来源，用于判断「是不是我刚才那次」', () => {
@@ -69,7 +73,7 @@ test('空计划返回 null，界面据此不渲染空区块', () => {
   assert.equal(buildPushOverview(null), null)
 })
 
-test('插件名单内容损坏时该计数归零，但不拖垮整个概述', () => {
+test('插件名单内容损坏时给占位符，但不拖垮整个概述', () => {
   const o = buildPushOverview({
     files: [
       { path: 'config/profile.patch.yml', content: 'x\n' },
@@ -79,7 +83,7 @@ test('插件名单内容损坏时该计数归零，但不拖垮整个概述', ()
   })
 
   const byLabel = Object.fromEntries(o.stats.map(s => [s.label, s.value]))
-  assert.equal(byLabel['插件'], 0, '坏数据只影响这一条统计')
+  assert.equal(byLabel['插件'], '—', '读不出来就说读不出来，不能报 0')
   assert.equal(byLabel['公共配置'], 1, '其它统计照常给出')
   assert.ok(o.title, '概述本身仍然可用')
 })
@@ -174,4 +178,78 @@ test('拉取概述的标题与标签可以由调用方改 —— 导入结果复
   assert.equal(view.title, '本次导入结果')
   assert.equal(view.stats[0].label, '已写入')
   assert.equal(view.location, '/tmp/pkg')
+})
+
+// ─── 本机现状概述（打开设置页就该看见的那一块）──────────────────────
+// 它不来自任何一次动作，而是「选完 profile 之后第一眼」：
+// 配了几家供应商、装了几个插件 —— 用户据此确认这是不是要备份的那份。
+
+const INSPECT = {
+  patchFile: '/home/u/.dsh/profiles/web/cordis.patch.yml',
+  patchExists: true,
+  total: 3,
+  shared: [{ id: 'llm-pi-ai' }],
+  machine: [{ id: 'webserver' }, { id: 'ui-theme' }],
+  excludedIds: ['ui-chat'],
+  skills: [{ relPath: 'one/SKILL.md' }, { relPath: 'one/lib/a.mjs' }, { relPath: 'two/SKILL.md' }],
+  skillNames: ['one', 'two'],
+  providers: { count: 3, names: ['a', 'b', 'c'] },
+  bundles: { official: ['x', 'y'], thirdParty: ['z'] },
+}
+
+test('本机概述回答「几家供应商、几个插件」—— 这是选完 profile 第一件想确认的事', () => {
+  const o = buildInspectOverview(INSPECT, { now: new Date('2026-10-16T12:00:00Z') })
+  const byLabel = Object.fromEntries(o.stats.map(s => [s.label, s.value]))
+
+  assert.equal(byLabel['模型供应商'], 3)
+  // 用户拿这个数字对自己的插件列表：19 里塞进 10 个 DSH 自带的，
+  // 他会以为自己多装了一倍。
+  assert.equal(byLabel['已装插件'], 1, '只数自己装的')
+  assert.equal(byLabel['公共配置项'], 1)
+  assert.equal(byLabel['技能'], 2, '一个技能目录算一个技能，不是按文件数')
+  assert.equal(o.location, '/home/u/.dsh/profiles/web/cordis.patch.yml')
+  assert.ok(
+    o.meta.some(m => m.includes('插件名单共 3 项（其中 DSH 自带 2 项）')),
+    '自带的要交代清楚，不能让人以为名单只记了第三方',
+  )
+})
+
+test('技能数与技能文件数分开说 —— 一个技能可能横跨好几个文件', () => {
+  const o = buildInspectOverview(INSPECT)
+  const byLabel = Object.fromEntries(o.stats.map(s => [s.label, s.value]))
+  assert.equal(byLabel['技能'], 2)
+  assert.ok(o.meta.some(m => m.includes('3 个文件')), '文件数摊开写，别让两个数字打架')
+})
+
+test('插件名单取不到时给占位符而不是 0 —— 0 会被读成「一个插件都没装」', () => {
+  const o = buildInspectOverview({ ...INSPECT, bundles: null })
+  const byLabel = Object.fromEntries(o.stats.map(s => [s.label, s.value]))
+
+  assert.equal(byLabel['已装插件'], '—')
+  assert.ok(o.meta.some(m => m.includes('插件名单暂不可用')))
+})
+
+test('没有 DSH 自带插件时不加那条交代 —— 零项自带是噪音', () => {
+  const o = buildInspectOverview({ ...INSPECT, bundles: { official: [], thirdParty: ['z'] } })
+  const byLabel = Object.fromEntries(o.stats.map(s => [s.label, s.value]))
+
+  assert.equal(byLabel['已装插件'], 1)
+  assert.ok(!o.meta.some(m => m.includes('DSH 自带')), '没自带就别提')
+})
+
+test('把「留在本机」「不同步」的项数摆出来 —— 否则「我配的怎么没过去」无从查证', () => {
+  const o = buildInspectOverview(INSPECT)
+  const joined = o.meta.join(' | ')
+  assert.match(joined, /留在本机 2 项/)
+  assert.match(joined, /不同步 1 项/)
+})
+
+test('没有本机现状可读时返回 null —— 不给一份凭空的清单', () => {
+  assert.equal(buildInspectOverview(null), null)
+  assert.equal(buildInspectOverview(undefined), null)
+})
+
+test('本机概述也带读取时间，用来判断看到的是不是刚才那次', () => {
+  const o = buildInspectOverview(INSPECT, { now: new Date('2026-10-16T12:00:00Z') })
+  assert.match(o.meta.join(' | '), /读取于 2026-10-16 \d{2}:\d{2}/)
 })

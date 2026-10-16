@@ -130,6 +130,9 @@ const deps = (overrides) => {
       appliedLabel: options.appliedLabel ?? null,
     }),
     buildImportOverview: () => ({ title: '本次将导入', stats: [], meta: [], location: '/i' }),
+    // 本机概述：与另外三个不同，它在用户还没做任何动作时就必须有值，
+    // 否则预览区一直空着（「选完 profile 为什么看不到东西」就是这么来的）。
+    buildInspectOverview: () => ({ title: '本机可同步的内容', stats: [], meta: [], location: '/p' }),
   }
 }
 
@@ -195,6 +198,20 @@ test('本机现状读不到时仍然回 200 —— 否则整节内容消失，�
   assert.deepEqual(body.editableEntries, [], '可编辑条目只是便利功能，不该把整节状态一起带崩')
   // 候选名单要带出去 —— 界面靠它把名字摆出来让人点
   assert.deepEqual(body.profile.profiles, ['installcheck', 'web'])
+})
+
+test('status 带出本机概述 —— 预览区在用户点任何按钮之前就有内容可看', async () => {
+  const handlers = createRouteHandlers(deps())
+  const body = await (await handlers.fetch(get(ROUTES.status))).json()
+
+  assert.equal(body.overview.title, '本机可同步的内容')
+})
+
+test('本机现状读不到时不给概述 —— 不给一份凭空的清单', async () => {
+  const d = deps({ prepareInspect: async () => { throw new Error('发现多个 profile，无法确定同步哪一个') } })
+  const body = await (await createRouteHandlers(d).fetch(get(ROUTES.status))).json()
+
+  assert.equal(body.overview, null, '读不到就说读不到，界面照旧走「还没选 profile」那条路')
 })
 
 // ─── 预览 → 确认 的两段式（界面决策 U1）────────────────────────────────

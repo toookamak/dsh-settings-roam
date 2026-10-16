@@ -102,7 +102,7 @@
   },
   "preview": {
     "title": "Preview",
-    "empty": "Nothing yet. Use “Export to file” below to see what would be taken.",
+    "empty": "Cannot read this machine yet. If it has several profiles, set one in the config first; you can also use “Export to file” below to see what would be taken.",
     "pickTitle": "Choose the profile to sync",
     "pickHint": "This machine has {names}. Only the selected one is synced; the rest stay as they are.",
     "pickSaved": "Selected {name}."

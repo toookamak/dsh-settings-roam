@@ -12,7 +12,12 @@ import z from '@deepseek-ai/schemastery'
 import { resolveDshHome } from './src/home-paths.js'
 import { createGitBackend } from './src/backends/git.js'
 import { createSyncService } from './src/service.js'
-import { buildPushOverview, buildPullOverview, buildImportOverview } from './src/overview.js'
+import {
+  buildPushOverview,
+  buildPullOverview,
+  buildImportOverview,
+  buildInspectOverview,
+} from './src/overview.js'
 import { describeRoutes } from './src/routes.js'
 import { DEFAULT_BRANCH } from './src/constants.js'
 
@@ -232,7 +237,13 @@ export function apply(ctx, config) {
   // 每条路由都经 ctx.effect 注册，卸载插件时随之注销——这也是它比在模块级
   // 挂一个全局 HTTP 服务正确的地方：一个进程可能加载多份 profile。
   ctx.inject(['connection'], (scope) => {
-    for (const route of describeRoutes({ service, buildPushOverview, buildPullOverview, buildImportOverview })) {
+    for (const route of describeRoutes({
+      service,
+      buildPushOverview,
+      buildPullOverview,
+      buildImportOverview,
+      buildInspectOverview,
+    })) {
       scope.effect(
         () => scope.connection.fetch.register(route),
         `dsh-settings-roam: route ${route.path}`,

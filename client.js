@@ -191,7 +191,7 @@ window.__ModuleLoader__.load({
         },
         preview: {
           title: '预览',
-          empty: '还没有内容。点下面的「导出到文件」，先看看会带走什么。',
+          empty: '暂时读不到本机现状。本机有多个 profile 时，先去配置里指定一个；也可以点下面的「导出到文件」，先看看会带走什么。',
           pickTitle: '先选一个要同步的 profile',
           pickHint: '这台机器上有 {names}。选中的那个才会被同步，其余的保持原样。',
           pickSaved: '已选 {name}。',
@@ -310,7 +310,7 @@ window.__ModuleLoader__.load({
         },
         preview: {
           title: 'Preview',
-          empty: 'Nothing yet. Use \u201cExport to file\u201d below to see what would be taken.',
+          empty: 'Cannot read this machine yet. If it has several profiles, set one in the config first; you can also use \u201cExport to file\u201d below to see what would be taken.',
           pickTitle: 'Choose the profile to sync',
           pickHint: 'This machine has {names}. Only the selected one is synced; the rest stay as they are.',
           pickSaved: 'Selected {name}.',
@@ -1103,9 +1103,14 @@ window.__ModuleLoader__.load({
       const skipped = state?.skipped ?? []
       const hasOverview = Boolean(state?.overview)
       const profile = state?.status?.profile
+      const profileNames = Array.isArray(profile?.profiles) ? profile.profiles : []
       // 两种情形都要给选择器：多 profile 还没选（这一节读不出内容），
       // 以及已经选了但机器上还有别的（换一个不用去翻设置）。
-      const needsPick = state?.kind === 'needs-profile' || profile?.needsChoice === true
+      // 但候选名单为空时 ProfilePicker 自己会返回 null，什么都渲染不出来；
+      // 这时不能再当「已经给了用户一条路」——否则预览块是一片空白，
+      // 连「这里为什么是空的」都没有一句。
+      const needsPick = profileNames.length > 0
+        && (state?.kind === 'needs-profile' || profile?.needsChoice === true)
       return h(
         'div',
         { className: 'roam-card roam-preview', id: 'roam-preview' },
@@ -1113,7 +1118,11 @@ window.__ModuleLoader__.load({
         needsPick ? h(ProfilePicker, { profile, form, t, onSaved: actions?.onSaved }) : null,
         h(Overview, { state, actions, t }),
         // 还没有任何内容时也要有一条说明，否则这一块是一个没有落款的空壳。
-        hasOverview || needsPick ? null : h('p', { className: 'roam-empty' }, t('preview.empty')),
+        // 读取中不显示这句：刷新那一瞬间会闪一下「还没有内容」，
+        // 紧接着又被概述替掉，看着像界面先否定自己一次。
+        hasOverview || needsPick || state?.kind === 'loading'
+          ? null
+          : h('p', { className: 'roam-empty' }, t('preview.empty')),
         skipped.length > 0
           ? h(
             'div',
@@ -1250,13 +1259,16 @@ window.__ModuleLoader__.load({
      * @returns {object}
      */
     function stateFrom(status) {
+      // 宿主随状态一起给出「这台机器上有什么」的概述，这里必须带上它：
+      // 预览区就是靠它才有内容，否则用户在点过任何按钮之前看到的永远是空的。
+      const overview = status.overview ?? null
       // 读不到本机现状（最常见的是多 profile 还没选）不是「出错了」，
       // 而是一件要用户做选择的事。当成 error 会让整节内容消失，
       // 连让他去选的地方都没有。
-      if (status.inspectError) return { kind: 'needs-profile', status }
-      if (!status.configured) return { kind: 'needs-config', status }
-      if (status.sharedCount === 0) return { kind: 'empty-cloud', status }
-      return { kind: 'clean', status }
+      if (status.inspectError) return { kind: 'needs-profile', status, overview }
+      if (!status.configured) return { kind: 'needs-config', status, overview }
+      if (status.sharedCount === 0) return { kind: 'empty-cloud', status, overview }
+      return { kind: 'clean', status, overview }
     }
 
     /**
