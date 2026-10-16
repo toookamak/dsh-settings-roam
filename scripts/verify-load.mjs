@@ -409,7 +409,15 @@ try {
     const problems = []
     if (b.patchExists !== true) problems.push('没找到 profile 的 patch 文件（路径解析可能错了）')
     if (b.profile?.name !== profile) problems.push(`profile 名不符：${b.profile?.name} ≠ ${profile}`)
-    if (!String(b.exportRoot ?? '').startsWith(home)) problems.push(`导出目录不在隔离根下：${b.exportRoot}`)
+    if (!String(b.exportRoot ?? '').startsWith(home)) problems.push(`导出根目录不在隔离根下：${b.exportRoot}`)
+    // 自更新那一行：认不出「装的是哪条依赖」的话，界面上整行都不显示，
+    // 用户就没有「检查更新」这个入口了。验收实例是 link 安装的，
+    // 所以它应当老实说「本地链接安装」，而不是装作有新版可装。
+    if (typeof b.update?.installedSpec !== 'string' || b.update.installedSpec === '') {
+      problems.push('状态里没有「插件是从哪条依赖装的」（界面上「插件自身」整行不会显示）')
+    } else if (b.update.reason !== 'not-git') {
+      problems.push(`link 安装的应当判成 not-git，实际：${b.update.reason}`)
+    }
     if (problems.length > 0) {
       console.error('✗ 路由通了，但它看的不是我们期望的那个 profile：')
       for (const p of problems) console.error(`  ${p}`)
@@ -419,6 +427,8 @@ try {
         + `本机专属 ${b.machineCount} 项、技能 ${b.skillCount} 个`)
       console.log(`  profile=${b.profile.name} 已配置云端=${b.configured}`
         + ` patch 文件已读到=${b.patchExists}`)
+      console.log(`  插件自身：装的依赖=${b.update.installedSpec}`
+        + `（${b.update.reason}）`)
     }
   }
 

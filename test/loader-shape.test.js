@@ -950,6 +950,159 @@ test('动作区第一个是「导出到文件」，且每个按钮都真接上�
   assert.deepEqual(clicked, ['export', 'import', 'pull', 'push'])
 })
 
+// ─── 更新插件自己（用户要求「每次卸载重装太麻烦」）──────────────────
+// 更新与同步是两件事：上面那排按钮动的是配置内容，这一个动的是插件本身。
+// 混在一排里，用户会以为「推送」也会把插件一起更新。
+
+test('「插件自身」单独一行，不挤进同步按钮那排', async () => {
+  const exported = await loadClient('update-row')
+  const section = render(exported.Section({
+    state: {
+      kind: 'clean',
+      status: {
+        configured: true,
+        update: { installedSpec: 'github:toookamak/dsh-settings-roam', installedCommit: 'ca727d9abcdef', reason: 'unchecked' },
+      },
+    },
+    actions: {},
+  }))
+
+  const actions = findByClass(section, 'roam-actions')
+  assert.equal((actions.children ?? []).filter(isButton).length, 4, '同步动作仍然是四个')
+
+  const row = findByClass(section, 'roam-update')
+  assert.ok(row, '要有「插件自身」这一行')
+  const note = (row.children ?? []).find(c => c?.props?.className === 'roam-update-note')
+  assert.match(note.children[0], /ca727d9/, '要说清现在装的是哪一版')
+  const button = (row.children ?? []).filter(isButton)[0]
+  assert.equal(button.children[0], '检查更新')
+})
+
+test('认不出安装方式时不给「检查更新」按钮 —— 不给点了必然没用处的按钮', async () => {
+  const exported = await loadClient('update-none')
+  // 没有 update 信息（老版本宿主 / 拿不到 profile 清单）：整行不出现
+  const bare = render(exported.Section({
+    state: { kind: 'clean', status: { configured: true } },
+    actions: {},
+  }))
+  assert.equal(findByClass(bare, 'roam-update'), undefined, '没有这一项时整行不出现')
+
+  // 本地链接安装：改代码重启即可，这里更新没有意义，但要说清原因
+  const linked = render(exported.Section({
+    state: {
+      kind: 'clean',
+      status: { configured: true, update: { installedSpec: 'link:/home/tokamak/dev/repos/dsh-settings-roam', reason: 'not-git' } },
+    },
+    actions: {},
+  }))
+  const note = findByClass(linked, 'roam-update-note')
+  assert.match(note.children[0], /本地链接安装/)
+})
+
+test('updateNote 只说已经知道的事，不猜「有没有新版本」', async () => {
+  const exported = await loadClient('update-note')
+  const t = exported.makeT('zh')
+
+  assert.equal(exported.updateNote({ status: {} }, t), null, '没有这一项就整行不显示')
+  assert.match(
+    exported.updateNote({ status: { update: { installedSpec: 'github:o/r', installedCommit: 'abcdef0123456789', reason: 'unchecked' } } }, t),
+    /abcdef0/,
+  )
+  // 状态接口刻意不联网：远程提交是空的，但这是「还没问」而不是「问不到」
+  assert.match(
+    exported.updateNote({ status: { update: { installedSpec: 'github:o/r', installedCommit: null, reason: 'unchecked' } } }, t),
+    /认不出当前版本/,
+  )
+  assert.match(
+    exported.updateNote({ status: { update: { installedSpec: 'link:/x', reason: 'not-git' } } }, t),
+    /本地链接安装/,
+  )
+  // 状态里没有 remoteCommit / needsUpdate 这两个概念：猜一句「有新版本」很容易，
+  // 但那是一句假话，用户点下去只会白等一轮网络。
+  assert.match(
+    exported.updateNote({ status: { update: { installedSpec: 'github:o/r', installedCommit: 'abc', reason: 'unreachable' } } }, t),
+    /abc/,
+  )
+})
+
+test('更新确认页摆出「从哪一版到哪一版」', async () => {
+  const exported = await loadClient('update-pending')
+  const pending = render(exported.Pending({
+    state: {
+      kind: 'review',
+      pending: {
+        kind: 'update',
+        token: 'tk',
+        compat: null,
+        update: { from: 'ca727d9', to: '1a2b3c4' },
+        confirmLabel: '确认更新',
+        text: '会把依赖改成 github:toookamak/dsh-settings-roam#1a2b3c4，更新完要重启 DSH。',
+      },
+    },
+    actions: {},
+    t: exported.makeT('zh'),
+  }))
+  const line = findByClass(pending, 'roam-update-line roam-mono')
+  assert.match(line.children[0], /ca727d9/, '要说清现在是什么')
+  assert.match(line.children[0], /1a2b3c4/, '也要说清会变成什么')
+  const buttons = (byClass(pending, 'roam-pending-actions').children ?? []).filter(isButton)
+  assert.equal(buttons[0].children[0], '确认更新')
+})
+
+test('预览时把「认不出的版本」留成 null，而不是填个问号', async () => {
+  const exported = await loadClient('update-pending-null')
+  const src = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+  // 填 '?' 的话，Pending 里的 null 判断就永远不生效，
+  // 最后渲染成「有新版本：? → ca727d9」——看着像界面坏了。
+  assert.doesNotMatch(src, /from: checked\.from \?\? '\?'/, '不要在预览里填问号占位')
+  assert.match(src, /from: checked\.from \?\? null/)
+  assert.ok(exported.shortOr('') === '未知版本')
+  assert.ok(exported.shortOr(null) === '未知版本')
+  assert.ok(exported.shortOr('ca727d9') === 'ca727d9')
+})
+
+test('认不出当前版本时，不说一句半截话', async () => {
+  const exported = await loadClient('update-pending-unknown')
+  const pending = render(exported.Pending({
+    state: {
+      kind: 'review',
+      pending: {
+        kind: 'update',
+        token: 'tk',
+        compat: null,
+        update: { from: null, to: '1a2b3c4' },
+        confirmLabel: '确认更新',
+        text: '会把依赖改成 github:o/r#1a2b3c4。',
+      },
+    },
+    actions: {},
+    t: exported.makeT('zh'),
+  }))
+  const line = findByClass(pending, 'roam-update-line roam-mono')
+  // 「有新版本： → 1a2b3c4」这种半截话看着像界面坏了，用户也不知道该不该点
+  assert.doesNotMatch(line.children[0], /→/, '认不出旧版本时不该画那个箭头')
+  assert.match(line.children[0], /1a2b3c4/)
+  assert.match(line.children[0], /认不出来/)
+})
+
+test('「这一次没产生变化」要自己说话，不能被「已与本机一致」盖掉', async () => {
+  const exported = await loadClient('clean-speaks')
+  const t = exported.makeT('zh')
+  const view = exported.describeStatus({ kind: 'clean', text: t('edit.noop') }, t)
+  assert.equal(view.text, t('edit.noop'), '编辑没改动时要说「没有需要改的」')
+  // 没有自带说法时，才退回「已与本机一致」
+  assert.equal(exported.describeStatus({ kind: 'clean' }, t).text, t('status.clean'))
+})
+
+test('「已经是最新」与「操作已完成」是两句不同的话', async () => {
+  const exported = await loadClient('update-uptodate')
+  const t = exported.makeT('zh')
+  const upToDate = t('result.upToDate', { from: 'ca727d9' })
+  assert.match(upToDate, /最新/)
+  assert.notEqual(upToDate, t('result.done'), '什么都发生和「已经是最新」不是一回事')
+  assert.match(t('pending.update', { spec: 'github:o/r#abc' }), /重启/, '不写重启，用户会以为更新没生效')
+})
+
 test('界面分成「预览」与「操作」两块，预览排在操作前面', async () => {
   const exported = await loadClient('blocks')
   const section = render(exported.Section({

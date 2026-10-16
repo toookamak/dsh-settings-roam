@@ -38,6 +38,7 @@ const USAGE = `设置漫游 —— 把一台机器的 DSH 配置搬到另一台
   dsh-settings-roam import <目录>     读一份导出包（默认只算计划，不动本机）
   dsh-settings-roam push [目录]       推到云端（默认只算差异，--yes 才写）
   dsh-settings-roam pull              从云端拉回本机（默认只算差异，--yes 才写）
+  dsh-settings-roam update            把插件更新到远端最新（默认只检查，--yes 才装）
   dsh-settings-roam doctor            检查数据根目录、云端仓库配置是否齐备
   dsh-settings-roam help              显示这份帮助
 
@@ -46,7 +47,7 @@ const USAGE = `设置漫游 —— 把一台机器的 DSH 配置搬到另一台
   --profile <名字>    指定要同步哪个 profile（默认自动判断唯一的一个）
   --repo <地址>       云端 git 仓库地址（未配置时 export 仍可用）
   --branch <名字>     备份放在仓库的哪条分支（默认 settings-roam）
-  --yes, -y           push／pull／import 时真正写入；不加时只打印计划
+  --yes, -y           push／pull／import／update 时真正写入；不加时只打印计划
   --json              以 JSON 输出，便于脚本处理
 
 说明：
@@ -57,6 +58,10 @@ const USAGE = `设置漫游 —— 把一台机器的 DSH 配置搬到另一台
   写入前会把被覆盖的文件备份下来，报告里给出备份路径。
   包里的本机项（监听地址、主题、默认模型这类）一律不写回——
   这台机器保持它自己的值。
+
+  update 查的是「这个插件自己是从哪个仓库装的、远端最新提交是哪一个」。
+  它把 profile 里的依赖改成带具体提交号的写法——直接重装同一个来源会被 DSH
+  拒掉（依赖没变化时它无法判定装了哪一个包）。装完要重启 DSH 才生效。
 
   push 默认也会先导出到本地一份（可以用 [目录] 指定位置），
   这样「推上去的」和「你核对过的」是同一份内容。
@@ -436,6 +441,67 @@ async function cmdImport({ service }, options) {
   return 0
 }
 
+/**
+ * 把插件更新到远端最新。
+ *
+ * 与其它命令一样分两段：先只检查（要联网问远端 HEAD），加 --yes 才真的换依赖。
+ * 「有没有新版」这件事只有问过才知道，所以这里不缓存、不猜。
+ */
+async function cmdUpdate({ service }, options) {
+  const json = options.json === true
+  let checked
+  try {
+    checked = await service.prepareUpdate({})
+  } catch (error) {
+    console.error(error.message)
+    return 1
+  }
+
+  if (checked.needsUpdate !== true) {
+    if (json) {
+      console.log(JSON.stringify({ ok: true, updated: false, reason: checked.reason, installed: checked.from }, null, 2))
+    } else {
+      console.log(`已经是最新版本（${checked.from ?? '未知'}）。`)
+    }
+    return 0
+  }
+
+  if (!options.yes) {
+    if (json) {
+      console.log(JSON.stringify({
+        ok: true,
+        dryRun: true,
+        from: checked.from,
+        to: checked.to,
+        nextSpec: checked.nextSpec,
+        repoUrl: checked.repoUrl,
+      }, null, 2))
+    } else {
+      console.log(`当前版本：${checked.from}`)
+      console.log(`远端最新：${checked.to}`)
+      console.log(`将把依赖改成：${checked.nextSpec}`)
+      console.log('')
+      console.log('这只是检查。加上 --yes 才会真的更新（更新完要重启 DSH 才生效）。')
+    }
+    return 0
+  }
+
+  try {
+    const result = await service.applyUpdate(checked)
+    if (json) {
+      console.log(JSON.stringify({ ok: true, updated: result.updated, to: result.to, nextSpec: result.nextSpec }, null, 2))
+    } else {
+      console.log(`已更新到 ${result.to}。`)
+      console.log('重启 DSH 后生效。')
+    }
+    return 0
+  } catch (error) {
+    console.error(error.message)
+    if (error.nextSpec) console.error(`可以手动把依赖改成：${error.nextSpec}`)
+    return 1
+  }
+}
+
 async function main(argv) {
   const parsed = parseArgs(argv)
   if (parsed.options.help || parsed.command === 'help') {
@@ -449,6 +515,7 @@ async function main(argv) {
     import: cmdImport,
     push: cmdPush,
     pull: cmdPull,
+    update: cmdUpdate,
     doctor: cmdDoctor,
   }
   const run = commands[parsed.command]

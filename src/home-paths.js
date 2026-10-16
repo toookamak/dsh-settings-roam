@@ -109,6 +109,20 @@ export function profilePatchPath(dshRoot, profileName) {
 }
 
 /**
+ * 一个 profile 的目录。
+ *
+ * 自更新要在 profile 目录里读依赖清单与锁文件，所以路径拼法集中在这里，
+ * 不让调用方各自写 join(root,'profiles',name)（那是布局假设，错了不会报错）。
+ *
+ * @param {string} dshRoot
+ * @param {string} profileName
+ * @returns {string}
+ */
+export function profileDir(dshRoot, profileName) {
+  return join(dshRoot, PROFILES_DIR, profileName)
+}
+
+/**
  * 列出现有的 profile 名。
  *
  * 用于在没有显式指定 profile 时自动选择——用户不该被要求先知道

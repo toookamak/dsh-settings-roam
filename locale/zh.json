@@ -53,6 +53,8 @@
     "importConfirm": "正在写回本机…",
     "editPrepare": "正在核对改了什么…",
     "editConfirm": "正在写回配置…",
+    "updateCheck": "正在问远端最新版本…",
+    "updateApply": "正在更新…",
     "pushConfirm": "正在推送…",
     "pullConfirm": "正在应用…"
   },
@@ -66,6 +68,7 @@
     "confirmPull": "确认拉取",
     "confirmImport": "确认导入",
     "confirmEdit": "确认改动",
+    "confirmUpdate": "确认更新",
     "cancel": "取消",
     "copy": "复制路径",
     "copied": "已复制"
@@ -74,7 +77,8 @@
     "push": "将推送 {files} 个文件，其中 {n} 项与云端不同。确认后写入云端。",
     "pull": "云端有 {remote} 条配置，其中 {n} 项与本机不同。确认后改动本机。",
     "import": "将写回 {n} 项，本机原有的监听地址、主题等不受影响。确认后改动本机。",
-    "edit": "将改动 {n} 处配置。确认后写入并重跑插件。"
+    "edit": "将改动 {n} 处配置。确认后写入并重跑插件。",
+    "update": "会把依赖改成 {spec}，更新完要重启 DSH。确认后开始更新。"
   },
   "compat": {
     "blocked": "上面这些必须先处理：直接写下去不会报错，但也不会生效。"
@@ -85,6 +89,16 @@
     "save": "保存修改",
     "removed": "（删除这一项）",
     "noop": "跟原来一样，没有需要改的。"
+  },
+  "update": {
+    "title": "插件自身",
+    "installed": "当前版本 {short}",
+    "unknown": "认不出当前版本：依赖清单里没有记下提交号。",
+    "noSpec": "这个 profile 的依赖清单里没有本插件，认不出它是怎么装进来的。",
+    "notGit": "这一份是本地链接安装的，改完代码重启 DSH 即可，不用在这里更新。",
+    "check": "检查更新",
+    "available": "有新版本：{from} → {to}",
+    "availableUnknown": "有新版本：{to}（当前这一版认不出来）"
   },
   "preview": {
     "title": "预览",
@@ -104,6 +118,8 @@
   },
   "result": {
     "done": "操作已完成。",
-    "exported": "已导出 {total} 项。"
+    "exported": "已导出 {total} 项。",
+    "updated": "已更新到 {to}。重启 DSH 后生效。",
+    "upToDate": "已经是最新版本（{from}）。"
   }
 }

@@ -64,6 +64,33 @@ function fakeService(overrides = {}) {
     listEditableEntries: () => [],
     prepareEdit: async () => ({ id: 'llm-pi-ai', fields: [], changed: [], rows: [] }),
     applyEdit: async () => ({ id: 'llm-pi-ai', changed: [], backupPath: '' }),
+    // 自更新的状态：随 status 一起给，且**刻意不带网络请求**。
+    // 真正的「有没有新版」要联网，那次调用放在「检查更新」按钮后面。
+    describeUpdate: async () => ({
+      installedSpec: 'github:toookamak/dsh-settings-roam',
+      installedCommit: 'ca727d9677e74db24eca3631a5d362349d0b2064',
+      remoteCommit: null,
+      repoUrl: 'https://github.com/toookamak/dsh-settings-roam.git',
+      needsUpdate: false,
+      canInstall: true,
+      reason: 'unreachable',
+      error: null,
+    }),
+    prepareUpdate: async () => ({
+      installedSpec: 'github:toookamak/dsh-settings-roam',
+      repoUrl: 'https://github.com/toookamak/dsh-settings-roam.git',
+      from: 'ca727d9',
+      to: '525bf38',
+      nextSpec: 'github:toookamak/dsh-settings-roam#525bf385e368830f7ec221d51ebfd32af9bfb3e9',
+      needsUpdate: true,
+      noop: false,
+      reason: 'update-available',
+    }),
+    applyUpdate: async () => ({
+      updated: true,
+      nextSpec: 'github:toookamak/dsh-settings-roam#525bf385e368830f7ec221d51ebfd32af9bfb3e9',
+      to: '525bf38',
+    }),
     defaultImportRoot: () => '/tmp/import',
     describeImportSource: () => ({
       dir: '/tmp/import', resolved: null, available: false,
@@ -325,11 +352,11 @@ test('内部异常回一句可显示的话，不带堆栈与绝对路径', async
   assert.ok(!/\bat\s+\w+.*:\d+:\d+/.test(body.error), '不得把堆栈回给界面')
 })
 
-test('describeRoutes 给出六条路由，方法与路径齐全', () => {
+test('describeRoutes 给出七条路由，方法与路径齐全', () => {
   const routes = describeRoutes(deps())
   assert.deepEqual(
     routes.map(r => r.path),
-    [ROUTES.status, ROUTES.export, ROUTES.import, ROUTES.push, ROUTES.pull, ROUTES.edit],
+    [ROUTES.status, ROUTES.export, ROUTES.import, ROUTES.push, ROUTES.pull, ROUTES.edit, ROUTES.update],
   )
   assert.deepEqual(routes[0].methods, ['GET'])
   assert.deepEqual(routes[1].methods, ['POST'])
@@ -337,6 +364,7 @@ test('describeRoutes 给出六条路由，方法与路径齐全', () => {
   assert.deepEqual(routes[3].methods, ['POST'])
   assert.deepEqual(routes[4].methods, ['POST'])
   assert.deepEqual(routes[5].methods, ['POST'])
+  assert.deepEqual(routes[6].methods, ['POST'])
   for (const r of routes) {
     assert.equal(typeof r.fetch, 'function')
     assert.equal(r.requestBody, 'buffered')

@@ -16,7 +16,7 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { parsePatchList, renderPatches, splitByTopLevelId } from './yaml-loader.js'
-import { profilePatchPath, listProfiles } from './home-paths.js'
+import { profilePatchPath, profileDir, listProfiles } from './home-paths.js'
 import { extractShared } from './extract.js'
 import { buildSnapshot, serializeSnapshot } from './snapshot.js'
 import { diffSnapshots, summarizeDiff } from './diff.js'
@@ -33,6 +33,16 @@ import {
 import { exportForReview } from './export.js'
 import { flattenConfig, applyEdits, diffConfig, buildEdits } from './edit.js'
 import { timestamp } from './backup.js'
+import { PACKAGE_NAME } from './constants.js'
+import {
+  UPDATE_REASONS,
+  installedCommitFromLock,
+  parseGitSpec,
+  planUpdate,
+  readRemoteHead,
+  shortCommit,
+  specWithCommit,
+} from './update.js'
 import { assertBackend } from './backends/index.js'
 import {
   resolvePackageDir,
@@ -350,6 +360,213 @@ export function createSyncService(config) {
    *
    * @returns {{id: string, name?: string, fields: object[]}[]}
    */
+  /**
+   * 自更新相关的读取。
+   *
+   * 三个事实分开取，谁也不替谁兜底：
+   *   - 装的是哪一版：profile 的依赖清单里那条 spec（多半没带提交号）
+   *   - 实际拉下来的是哪个提交：只在 pnpm 锁文件的解析结果里
+   *   - 远端最新是哪个提交：要联网问
+   * 任何一项读不出来就如实返回 null，由 planUpdate 说明「读不出来」，
+   * 而不是拿另一项凑一个看起来像答案的东西。
+   */
+  function updateContext() {
+    const dir = profileDir(dshRoot, resolveProfileName())
+    const manifestPath = join(dir, 'package.json')
+    const lockPath = join(dir, 'pnpm-lock.yaml')
+
+    let installedSpec = null
+    if (existsSync(manifestPath)) {
+      try {
+        const doc = JSON.parse(readFileSync(manifestPath, 'utf8'))
+        const spec = doc?.dependencies?.[PACKAGE_NAME]
+        if (typeof spec === 'string' && spec.trim() !== '') installedSpec = spec.trim()
+      } catch {
+        installedSpec = null
+      }
+    }
+
+    let installedCommit = null
+    if (existsSync(lockPath)) {
+      try {
+        installedCommit = installedCommitFromLock(readFileSync(lockPath, 'utf8'), PACKAGE_NAME)
+      } catch {
+        installedCommit = null
+      }
+    }
+
+    return { dir, installedSpec, installedCommit }
+  }
+
+  /** 拿到插件管理服务；没注入或还没就绪时返回 null。 */
+  function resolvePluginManager() {
+    if (pluginManagerSource === null) return null
+    const manager = typeof pluginManagerSource === 'function'
+      ? pluginManagerSource()
+      : pluginManagerSource
+    return manager ?? null
+  }
+
+  /**
+   * 看一眼「装的是哪一版、最新是哪一版」。**绝不抛错**，界面每次打开都要调。
+   *
+   * 为什么不只在点「检查更新」时才调：用户要先看见当前版本，
+   * 才知道该不该点那个按钮；而这条信息里只有一半要联网。
+   *
+   * @param {{remoteCommit?: string|null, gitOptions?: object, reason?: string}} [input]
+   * @returns {Promise<object>}
+   */
+  async function describeUpdate(input = {}) {
+    const empty = {
+      installedSpec: null,
+      installedCommit: null,
+      remoteCommit: null,
+      repoUrl: null,
+      needsUpdate: false,
+      canInstall: false,
+      reason: 'unreachable',
+      error: null,
+    }
+
+    let context = null
+    try {
+      context = updateContext()
+    } catch (error) {
+      // 多 profile 又没指定时这里会失败——那是可展示的状态，不是崩溃
+      return { ...empty, error: String(error?.message ?? error) }
+    }
+
+    const { installedSpec, installedCommit } = context
+    // 一条依赖都没有 vs 有一条但不是 git 形态：两者的下一步动作完全不同，
+    // 前者要用户先去把插件装上，后者是「开发时的本地链接」或「装的版本号」。
+    if (typeof installedSpec !== 'string' || installedSpec.trim() === '') {
+      return { ...empty, installedSpec: installedSpec ?? null, installedCommit, reason: 'no-spec' }
+    }
+    const parsed = parseGitSpec(installedSpec)
+    if (parsed === null) {
+      return { ...empty, installedSpec, installedCommit, reason: 'not-git' }
+    }
+
+    try {
+      // remoteCommit 显式传 null 表示「这一趟不联网」。设置页每次打开都会问一次状态，
+      // 不该因为看一眼界面就跑 `git ls-remote`。这时原因标成 unchecked，
+      // 而不是 unreachable——「没问」与「问了问不到」在界面上必须能分开说。
+      const asked = input.remoteCommit === undefined
+      const remoteCommit = asked
+        ? await readRemoteHead(parsed.repoUrl, input.gitOptions)
+        : input.remoteCommit
+      const plan = planUpdate({ spec: installedSpec, installedCommit, remoteCommit })
+      const reason = !asked && remoteCommit === null ? 'unchecked' : plan.reason
+      const manager = resolvePluginManager()
+      return {
+        ...plan,
+        reason,
+        // planUpdate 把它叫 spec；对外统一叫 installedSpec，
+        // 免得调用方要在两个名字之间猜哪个是「装的那一条」。
+        installedSpec: plan.spec,
+        canInstall: typeof manager?.installBundle === 'function',
+        error: null,
+      }
+    } catch (error) {
+      return {
+        ...empty,
+        installedSpec,
+        installedCommit,
+        repoUrl: parsed.repoUrl,
+        error: String(error?.message ?? error),
+      }
+    }
+  }
+
+  /**
+   * 算出「更新到最新」要做的那一件事。**只读。**
+   *
+   * 结果是「把依赖换成带具体提交号的写法」，而不是「重新装一遍同一个来源」——
+   * 后者会被 DSH 的安装入口拒掉（依赖没变化时它无法判定装了哪一个包）。
+   *
+   * @param {{remoteCommit?: string|null, gitOptions?: object}} [input]
+   * @returns {Promise<object>}
+   */
+  async function prepareUpdate(input = {}) {
+    const status = await describeUpdate(input)
+
+    if (status.error !== null) {
+      const error = new Error(status.error)
+      error.code = 'update-unknown'
+      throw error
+    }
+    if (status.reason === 'no-spec') {
+      const error = new Error(
+        '这个 profile 的依赖清单里没有本插件，认不出它当初是怎么装进来的。'
+        + '先按插件页给的地址装一次，之后就能在这里更新了。',
+      )
+      error.code = 'update-no-spec'
+      throw error
+    }
+    if (status.reason === 'not-git') {
+      const error = new Error(
+        '这一份不是从 Git 仓库装的，没有「最新版本」可以比。本地链接安装用于开发，改完代码重启即可。',
+      )
+      error.code = 'update-not-git'
+      throw error
+    }
+    // 'unchecked' 是「这一趟没问」（状态接口用的措辞）。放到「我要更新」这个
+    // 语境里，它就是「手上没有远端提交可比」——和问不到是一回事，结果都是不能更新。
+    if (status.reason === 'unchecked' || status.reason === 'unreachable') {
+      const error = new Error(
+        '问不到远端仓库的最新提交。检查网络，或确认这个仓库还在、当前身份能读它。',
+      )
+      error.code = 'update-unreachable'
+      throw error
+    }
+
+    return {
+      ...status,
+      // 带上要写进去的那条 spec，用户能看到依赖会被改成什么
+      nextSpec: specWithCommit(status.installedSpec, status.remoteCommit),
+      // 认不出来时给 null 而不是空串：界面要按「有没有」分支说话，
+      // 空串会渲染成「有新版本： → ca727d9」这样一句半截话。
+      from: shortCommit(status.installedCommit) || null,
+      to: shortCommit(status.remoteCommit) || null,
+      noop: !status.needsUpdate,
+    }
+  }
+
+  /**
+   * 真正执行更新：让插件管理服务把依赖换成新的提交并重新安装。
+   *
+   * 改完必须重启才生效——运行中的这一份代码在内存里，
+   * 磁盘上的文件换了不会让它跟着变。
+   *
+   * @param {object} plan prepareUpdate 的结果
+   * @returns {Promise<{updated: boolean, reason?: string, nextSpec?: string, to?: string}>}
+   */
+  async function applyUpdate(plan) {
+    if (!plan?.needsUpdate) return { updated: false, reason: plan?.reason ?? 'up-to-date' }
+
+    const manager = resolvePluginManager()
+    if (typeof manager?.installBundle !== 'function') {
+      const spec = plan.nextSpec ?? ''
+      const error = new Error(
+        `这个环境里没拿到插件管理服务，无法自动更新。可以手动把依赖改成 ${spec}，再让 DSH 重新安装。`,
+      )
+      error.code = 'update-unavailable'
+      error.nextSpec = spec
+      throw error
+    }
+
+    try {
+      await manager.installBundle(plan.nextSpec)
+    } catch (error) {
+      const wrapped = new Error(`更新没成功：${String(error?.message ?? error)}`)
+      wrapped.code = 'update-failed'
+      wrapped.nextSpec = plan.nextSpec
+      throw wrapped
+    }
+
+    return { updated: true, nextSpec: plan.nextSpec, to: shortCommit(plan.remoteCommit) }
+  }
+
   function listEditableEntries() {
     const rows = readLocalRows()
     const split = splitByTopLevelId(rows)
@@ -433,7 +650,6 @@ async function crossCheck() {
       onlyService: result.serviceNames.filter(n => !directSet.has(n)).sort(),
     }
   }
-
   return {
     /**
      * 检查一次本机配置：取到什么、什么留在本机、技能有哪些。
@@ -1161,5 +1377,9 @@ async function crossCheck() {
      * @returns {{id: string, name?: string, fields: object[]}[]}
      */
     listEditableEntries,
+
+    describeUpdate,
+    prepareUpdate,
+    applyUpdate,
   }
 }

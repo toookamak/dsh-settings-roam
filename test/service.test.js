@@ -915,3 +915,212 @@ test('配置编辑：本机项不在可编辑列表里 —— 它们本来就不
   assert.ok(entries[0].fields.some(f => f.path === 'providers.demo.apiKeyEnv'))
   rmSync(root, { recursive: true })
 })
+
+// ── 自更新 ────────────────────────────────────────────────────────────
+//
+// 这一组用例锁的是一条实测结论：DSH 的安装入口在**依赖没有变化**时
+// 会拒绝安装（它靠 profile 的 dependencies 前后差异判断装上了哪一个包，
+// git 形态的 spec 走不到它的兜底匹配）。所以「更新」必须是
+// 「把 spec 换成带具体提交号的写法」，而不是「把同一个来源再装一遍」。
+
+const INSTALLED_SHA = 'ca727d9677e74db24eca3631a5d362349d0b2064'
+const REMOTE_SHA = '525bf385e368830f7ec221d51ebfd32af9bfb3e9'
+
+/** 把 profile 的依赖清单与锁文件写成「装了某个提交」的样子。 */
+function installAsGit(box, { spec = 'github:toookamak/dsh-settings-roam', commit = INSTALLED_SHA } = {}) {
+  const dir = join(box.dshRoot, 'profiles', box.profileName)
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({ name: 'profile', dependencies: { '@toookamak/dsh-settings-roam': spec } }, null, 2),
+  )
+  writeFileSync(
+    join(dir, 'pnpm-lock.yaml'),
+    [
+      "lockfileVersion: '9.0'",
+      'importers:',
+      '  .:',
+      '    dependencies:',
+      "      '@toookamak/dsh-settings-roam':",
+      `        specifier: ${spec}`,
+      `        version: https://codeload.github.com/toookamak/dsh-settings-roam/tar.gz/${commit}(@deepseek-ai/cordis@4.0.5-alpha.1)`,
+      '',
+    ].join('\n'),
+  )
+}
+
+test('自更新：装的是哪个提交读得出来，且能判断出「可以更新」', async () => {
+  const box = sandbox()
+  installAsGit(box)
+  const service = createSyncService({ backend: fakeBackend(), workDir: box.workDir, dshRoot: box.dshRoot, skillsRoot: box.skillsRoot })
+
+  const status = await service.describeUpdate({ remoteCommit: REMOTE_SHA })
+  assert.equal(status.installedCommit, INSTALLED_SHA, '提交号只在锁文件的解析结果里')
+  assert.equal(status.installedSpec, 'github:toookamak/dsh-settings-roam')
+  assert.equal(status.needsUpdate, true)
+  assert.equal(status.reason, 'update-available')
+  assert.equal(status.repoUrl, 'https://github.com/toookamak/dsh-settings-roam.git')
+  rmSync(box.root, { recursive: true })
+})
+
+test('自更新：提交号一样时明确说「已是最新」，不催用户点按钮', async () => {
+  const box = sandbox()
+  installAsGit(box, { commit: REMOTE_SHA })
+  const service = createSyncService({ backend: fakeBackend(), workDir: box.workDir, dshRoot: box.dshRoot, skillsRoot: box.skillsRoot })
+
+  const status = await service.describeUpdate({ remoteCommit: REMOTE_SHA })
+  assert.equal(status.needsUpdate, false)
+  assert.equal(status.reason, 'up-to-date')
+  rmSync(box.root, { recursive: true })
+})
+
+test('自更新：本地链接安装的形态没有「最新版本」可言', async () => {
+  const box = sandbox()
+  installAsGit(box, { spec: `link:${box.root}` })
+  const service = createSyncService({ backend: fakeBackend(), workDir: box.workDir, dshRoot: box.dshRoot, skillsRoot: box.skillsRoot })
+
+  const status = await service.describeUpdate({ remoteCommit: REMOTE_SHA })
+  assert.equal(status.reason, 'not-git')
+  assert.equal(status.repoUrl, null)
+  await assert.rejects(
+    () => service.prepareUpdate({ remoteCommit: REMOTE_SHA }),
+    err => { assert.equal(err.code, 'update-not-git'); return true },
+  )
+  rmSync(box.root, { recursive: true })
+})
+
+test('自更新：依赖清单里没有本插件时，不说成「本地链接安装」', async () => {
+  const box = sandbox()
+  // 依赖清单里一条都没有。这跟「有一条 link:」不是一回事：
+  // 本地链接安装是开发时的正常形态，而这里是我们压根不知道它怎么装进来的。
+  // 给同一种说法，用户会去找一个不存在的链接安装。
+  writeFileSync(
+    join(box.dshRoot, 'profiles', box.profileName, 'package.json'),
+    JSON.stringify({ name: 'profile', dependencies: { 'js-yaml': '^4.3.2' } }, null, 2),
+  )
+  const service = createSyncService({ backend: fakeBackend(), workDir: box.workDir, dshRoot: box.dshRoot, skillsRoot: box.skillsRoot })
+
+  const status = await service.describeUpdate({ remoteCommit: REMOTE_SHA })
+  assert.equal(status.reason, 'no-spec')
+  assert.equal(status.installedSpec, null)
+  await assert.rejects(
+    () => service.prepareUpdate({ remoteCommit: REMOTE_SHA }),
+    err => {
+      assert.equal(err.code, 'update-no-spec')
+      assert.match(err.message, /依赖清单里没有/)
+      return true
+    },
+  )
+  rmSync(box.root, { recursive: true })
+})
+
+test('自更新：读不出装的是哪一版时仍可更新，但如实说明是「读不出来」', async () => {
+  const box = sandbox()
+  installAsGit(box, { spec: 'github:toookamak/dsh-settings-roam', commit: 'deadbeef' })
+  const service = createSyncService({ backend: fakeBackend(), workDir: box.workDir, dshRoot: box.dshRoot, skillsRoot: box.skillsRoot })
+
+  const status = await service.describeUpdate({ remoteCommit: REMOTE_SHA })
+  assert.equal(status.installedCommit, null, '短号不算数：pnpm 解析不了短 sha')
+  assert.equal(status.needsUpdate, true)
+  assert.equal(status.reason, 'unknown-version')
+  rmSync(box.root, { recursive: true })
+})
+
+test('自更新：问不到远端时不谎称已是最新，也不给可点的更新', async () => {
+  const box = sandbox()
+  installAsGit(box)
+  const service = createSyncService({ backend: fakeBackend(), workDir: box.workDir, dshRoot: box.dshRoot, skillsRoot: box.skillsRoot })
+
+  // 状态接口刻意不联网：它要说的是「还没问过」，而不是「问不到」——
+  // 设置页一打开就报「问不到远端」，那是把自己没做的事推给用户。
+  const status = await service.describeUpdate({ remoteCommit: null })
+  assert.equal(status.reason, 'unchecked')
+  assert.equal(status.needsUpdate, false)
+  // 但「我要更新」这个动作里，没问过就等于不能更新：不能说「已经是最新」。
+  await assert.rejects(
+    () => service.prepareUpdate({ remoteCommit: null }),
+    err => { assert.equal(err.code, 'update-unreachable'); return true },
+  )
+  await assert.rejects(
+    () => service.prepareUpdate({ remoteCommit: null }),
+    err => { assert.equal(err.code, 'update-unreachable'); return true },
+  )
+  rmSync(box.root, { recursive: true })
+})
+
+test('自更新：算出的是「换成带提交号的 spec」，而不是重装同一个来源', async () => {
+  const box = sandbox()
+  installAsGit(box)
+  const service = createSyncService({ backend: fakeBackend(), workDir: box.workDir, dshRoot: box.dshRoot, skillsRoot: box.skillsRoot })
+
+  const plan = await service.prepareUpdate({ remoteCommit: REMOTE_SHA })
+  assert.equal(plan.nextSpec, `github:toookamak/dsh-settings-roam#${REMOTE_SHA}`)
+  assert.equal(plan.from, 'ca727d9')
+  assert.equal(plan.to, '525bf38')
+  assert.equal(plan.noop, false, '有更新时不该说「不用做」')
+  rmSync(box.root, { recursive: true })
+})
+
+test('自更新：执行时把新 spec 交给插件管理服务，并如实报告重启才生效', async () => {
+  const box = sandbox()
+  installAsGit(box)
+  const asked = []
+  const service = createSyncService({
+    backend: fakeBackend(),
+    workDir: box.workDir,
+    dshRoot: box.dshRoot,
+    skillsRoot: box.skillsRoot,
+    pluginManager: () => ({ installBundle: async spec => { asked.push(spec) } }),
+  })
+
+  const status = await service.describeUpdate({ remoteCommit: REMOTE_SHA })
+  assert.equal(status.canInstall, true, '拿得到插件管理服务时才给「立即更新」')
+  const plan = await service.prepareUpdate({ remoteCommit: REMOTE_SHA })
+  const result = await service.applyUpdate(plan)
+  assert.deepEqual(asked, [`github:toookamak/dsh-settings-roam#${REMOTE_SHA}`])
+  assert.equal(result.updated, true)
+  assert.equal(result.to, '525bf38')
+  rmSync(box.root, { recursive: true })
+})
+
+test('自更新：拿不到插件管理服务时说清怎么手动更新，而不是静默失败', async () => {
+  const box = sandbox()
+  installAsGit(box)
+  const service = createSyncService({ backend: fakeBackend(), workDir: box.workDir, dshRoot: box.dshRoot, skillsRoot: box.skillsRoot })
+
+  const plan = await service.prepareUpdate({ remoteCommit: REMOTE_SHA })
+  await assert.rejects(
+    () => service.applyUpdate(plan),
+    err => {
+      assert.equal(err.code, 'update-unavailable')
+      assert.match(err.message, /github:toookamak\/dsh-settings-roam#/, '要把该改成什么写清楚')
+      assert.equal(err.nextSpec, plan.nextSpec)
+      return true
+    },
+  )
+  rmSync(box.root, { recursive: true })
+})
+
+test('自更新：已是最新时执行也不报错，只是什么都不做', async () => {
+  const box = sandbox()
+  installAsGit(box, { commit: REMOTE_SHA })
+  const service = createSyncService({ backend: fakeBackend(), workDir: box.workDir, dshRoot: box.dshRoot, skillsRoot: box.skillsRoot })
+
+  const plan = await service.prepareUpdate({ remoteCommit: REMOTE_SHA })
+  assert.equal(plan.noop, true)
+  const result = await service.applyUpdate(plan)
+  assert.equal(result.updated, false)
+  assert.equal(result.reason, 'up-to-date')
+  rmSync(box.root, { recursive: true })
+})
+
+test('自更新：profile 定不下来时给一句能看懂的话，而不是抛错给界面', async () => {
+  const box = sandbox()
+  // 再放一个 profile 进来：多 profile 又没指定，解析必然失败
+  mkdirSync(join(box.dshRoot, 'profiles', 'desktop'), { recursive: true })
+  const service = createSyncService({ backend: fakeBackend(), workDir: box.workDir, dshRoot: box.dshRoot, skillsRoot: box.skillsRoot })
+
+  const status = await service.describeUpdate({ remoteCommit: REMOTE_SHA })
+  assert.match(status.error ?? '', /多个 profile/)
+  assert.equal(status.needsUpdate, false)
+  rmSync(box.root, { recursive: true })
+})

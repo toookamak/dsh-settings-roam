@@ -53,6 +53,8 @@
     "importConfirm": "Writing back to this machine…",
     "editPrepare": "Checking what changed…",
     "editConfirm": "Writing the change…",
+    "updateCheck": "Asking the remote for the latest commit…",
+    "updateApply": "Updating…",
     "pushConfirm": "Pushing…",
     "pullConfirm": "Applying…"
   },
@@ -66,6 +68,7 @@
     "confirmPull": "Confirm pull",
     "confirmImport": "Confirm import",
     "confirmEdit": "Confirm change",
+    "confirmUpdate": "Confirm update",
     "cancel": "Cancel",
     "copy": "Copy path",
     "copied": "Copied"
@@ -74,7 +77,8 @@
     "push": "This pushes {files} files, {n} of them differing from the cloud. Confirm to write it.",
     "pull": "The cloud holds {remote} entries, {n} of them differing from this machine. Confirm to change this machine.",
     "import": "This writes {n} items. This machine’s own listen address, theme, and so on are left alone. Confirm to change this machine.",
-    "edit": "This changes {n} settings. Confirm to write them and reload the plugin."
+    "edit": "This changes {n} settings. Confirm to write them and reload the plugin.",
+    "update": "The dependency will be set to {spec}; DSH must be restarted afterwards. Update now?"
   },
   "compat": {
     "blocked": "Fix the items above first: writing them now would silently do nothing."
@@ -85,6 +89,16 @@
     "save": "Save changes",
     "removed": "(remove this entry)",
     "noop": "No change from the current settings."
+  },
+  "update": {
+    "title": "This plugin",
+    "installed": "Installed {short}",
+    "unknown": "The installed commit is unknown: the profile manifest records no commit for it.",
+    "noSpec": "This profile does not list the plugin as a dependency, so the installed version cannot be told.",
+    "notGit": "This copy is a local link install. Edit the code and restart DSH instead.",
+    "check": "Check for updates",
+    "available": "Newer version available: {from} → {to}",
+    "availableUnknown": "Newer version available: {to} (the installed one cannot be identified)"
   },
   "preview": {
     "title": "Preview",
@@ -104,6 +118,8 @@
   },
   "result": {
     "done": "Done.",
-    "exported": "Exported {total} items."
+    "exported": "Exported {total} items.",
+    "updated": "Updated to {to}. Restart DSH for it to take effect.",
+    "upToDate": "Already up to date ({from})."
   }
 }

@@ -136,14 +136,14 @@ test('pluginManager 出现时能被捕获到 —— 注入是可选的，不是�
 
 // ─── 路由注册 ────────────────────────────────────────────────────────
 
-test('有 connection 时注册六条路由，且经 effect 绑定生命周期', () => {
+test('有 connection 时注册七条路由，且经 effect 绑定生命周期', () => {
   const routes = []
   const { effects } = setup({
     settings: {}, skills: {},
     connection: { fetch: { register: r => { routes.push(r); return async () => {} } } },
   })
 
-  assert.equal(effects.length, 6, '六条路由各挂一次 effect')
+  assert.equal(effects.length, 7, '七条路由各挂一次 effect')
   for (const e of effects) {
     assert.match(e.label, /dsh-settings-roam: route /, '标签要能看出是哪条路由')
   }
@@ -154,7 +154,7 @@ test('有 connection 时注册六条路由，且经 effect 绑定生命周期', 
     routes.map(r => r.path),
     ['/api/settings-roam.status', '/api/settings-roam.export',
       '/api/settings-roam.import', '/api/settings-roam.push', '/api/settings-roam.pull',
-      '/api/settings-roam.edit'],
+      '/api/settings-roam.edit', '/api/settings-roam.update'],
   )
 })
 

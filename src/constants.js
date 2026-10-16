@@ -14,3 +14,11 @@
  * 当成「云端多出来的东西」。名字与包名一致，便于在一堆分支里认出来。
  */
 export const DEFAULT_BRANCH = 'settings-roam'
+
+/**
+ * 本插件的包名。
+ *
+ * 自更新要在 profile 的依赖清单里认出「我们自己这一条」，
+ * 而这个名字在服务层与命令行都要用，所以放在共用常量里。
+ */
+export const PACKAGE_NAME = '@toookamak/dsh-settings-roam'

@@ -41,6 +41,7 @@ export const ROUTES = {
   push: `${ROUTE_PREFIX}.push`,
   pull: `${ROUTE_PREFIX}.pull`,
   edit: `${ROUTE_PREFIX}.edit`,
+  update: `${ROUTE_PREFIX}.update`,
 }
 
 /**
@@ -117,7 +118,7 @@ export function createRouteHandlers(deps) {
 
   /**
    * 存一份待确认的计划，返回它的 token。
-   * @param {'push'|'pull'|'import'|'edit'} kind
+   * @param {'push'|'pull'|'import'|'edit'|'update'} kind
    * @param {object} plan
    * @returns {string}
    */
@@ -134,7 +135,7 @@ export function createRouteHandlers(deps) {
    * 从没预览过 → 先点一次；带了别的 token → 那次预览已经作废；
    * 放太久 → 重新预览，免得拿一份十分钟前的差异去覆盖现在的本机。
    *
-   * @param {'push'|'pull'|'import'|'edit'} kind
+   * @param {'push'|'pull'|'import'|'edit'|'update'} kind
    * @param {unknown} token
    * @returns {{ok: true, plan: object} | {ok: false, error: string}}
    */
@@ -193,6 +194,10 @@ export function createRouteHandlers(deps) {
       // 而不是给一个点不动的空壳。读不到（例如还没选 profile）时给空列表：
       // 它只是个可选的便利功能，不该把整节状态一起带崩。
       editableEntries: inspectError === null ? service.listEditableEntries() : [],
+      // 「装的是哪一版」随状态一起给，且刻意把 remoteCommit 固定成 null：
+      // 真正的「有没有新版」要联网，那次调用放在「检查更新」按钮后面。
+      // 放在这里会让打开设置页这个动作在网络不通时卡住十几秒。
+      update: await service.describeUpdate({ remoteCommit: null }),
     }
   }
 
@@ -312,6 +317,55 @@ export function createRouteHandlers(deps) {
    *
    * @param {Request} request
    */
+  /**
+   * 自更新：先问远端有没有新版，用户确认后再换依赖并重新安装。
+   *
+   * 为什么确认这一步不能省：它会改 profile 的依赖并重装包，
+   * 而重装完成前谁也不知道新提交能不能用。用户要先看见「从哪一版换到哪一版」。
+   */
+  const update = async (request) => {
+    const body = await readBody(request)
+    const step = body.step ?? 'check'
+
+    if (step === 'check') {
+      // 这一步要联网（git ls-remote HEAD）。失败时 service 层已经把它
+      // 变成一句能看懂的话（问不到远端），不是原始的 git 报错。
+      const plan = await service.prepareUpdate({})
+      return jsonResponse({
+        ok: true,
+        step,
+        token: stash('update', plan),
+        installedSpec: plan.installedSpec,
+        repoUrl: plan.repoUrl,
+        from: plan.from,
+        to: plan.to,
+        nextSpec: plan.nextSpec,
+        needsUpdate: plan.needsUpdate,
+        noop: plan.noop,
+        reason: plan.reason,
+      })
+    }
+
+    if (step === 'confirm') {
+      const taken = take('update', body.token)
+      if (!taken.ok) return jsonResponse({ ok: false, error: taken.error }, 409)
+      const result = await service.applyUpdate(taken.plan)
+      return jsonResponse({
+        ok: true,
+        step,
+        updated: result.updated,
+        reason: result.reason ?? null,
+        to: result.to ?? null,
+        nextSpec: result.nextSpec ?? null,
+        // 换的是磁盘上的依赖，内存里跑着的还是旧的那一份：
+        // 不重启的话用户会以为更新没生效。
+        needsRestart: result.updated === true,
+      })
+    }
+
+    return jsonResponse({ ok: false, error: `不认识的步骤：${step}` }, 400)
+  }
+
   const edit = async (request) => {
     const body = await readBody(request)
     const step = body.step ?? 'prepare'
@@ -444,6 +498,10 @@ export function createRouteHandlers(deps) {
         if (request.method !== 'POST') return jsonResponse({ ok: false, error: '编辑需要 POST' }, 405)
         return await edit(request)
       }
+      if (path === ROUTES.update) {
+        if (request.method !== 'POST') return jsonResponse({ ok: false, error: '更新需要 POST' }, 405)
+        return await update(request)
+      }
       return jsonResponse({ ok: false, error: '没有这个路由' }, 404)
     } catch (error) {
       // 失败也要说清是什么失败：界面把这句话直接显示给用户。
@@ -451,7 +509,7 @@ export function createRouteHandlers(deps) {
     }
   }
 
-  return { fetch, status, exportLocal, importFrom, push, pull }
+  return { fetch, status, exportLocal, importFrom, push, pull, edit, update }
 }
 
 /**
@@ -469,5 +527,6 @@ export function describeRoutes(deps) {
     { path: ROUTES.push, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
     { path: ROUTES.pull, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
     { path: ROUTES.edit, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
+    { path: ROUTES.update, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
   ]
 }

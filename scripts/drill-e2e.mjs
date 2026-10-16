@@ -21,6 +21,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createGitBackend } from '../src/backends/git.js'
+import { PACKAGE_NAME } from '../src/constants.js'
 import { createSyncService } from '../src/service.js'
 import { parsePatchList } from '../src/yaml-loader.js'
 
@@ -401,6 +402,80 @@ try {
     typeof importReport.backupPath === 'string' && importReport.backupPath !== '')
   check('报告提示本机偏好没有随行',
     (importReport.skipped ?? []).some(item => /本机|不会/.test(item.explanation ?? '')))
+
+
+  // ---------- Step 6: 更新插件自己（用户要求「每次卸载重装太麻烦」）----------
+  console.log('\n=== Step 6 更新插件自己 ===')
+  // 为什么换的是「带提交号的依赖写法」而不是重装同一个来源：
+  // DSH 的安装入口靠「依赖声明有没有变」来判定装了哪一个包，没变时它会直接
+  // 报 ambiguous-install（无法从依赖变更中确定安装了哪一个包）。把 spec 换成
+  // 带具体提交号的形式，依赖字符串变了，那一步就能判定——这是自更新成立的前提。
+  const REPO_SPEC = 'github:toookamak/dsh-settings-roam'
+  const machineD = join(root, 'machine-d')
+  const profileD = join(machineD, 'profiles', 'web')
+  mkdirSync(profileD, { recursive: true })
+  writeFileSync(patchPathOf(machineD), PATCH_A)
+
+  const writeManifest = (dependencies) => writeFileSync(
+    join(profileD, 'package.json'),
+    `${JSON.stringify({ name: 'web', dependencies }, null, 2)}\n`,
+  )
+  const writeLock = (sha) => writeFileSync(join(profileD, 'pnpm-lock.yaml'), [
+    "lockfileVersion: '9.0'",
+    'importers:',
+    '  .:',
+    '    dependencies:',
+    `      '${PACKAGE_NAME}':`,
+    `        specifier: ${REPO_SPEC}`,
+    `        version: https://codeload.github.com/toookamak/dsh-settings-roam/tar.gz/${sha}`,
+    '',
+  ].join('\n'))
+
+  writeManifest({ [PACKAGE_NAME]: REPO_SPEC })
+  const installCalls = []
+  const fakeManager = { installBundle: async (spec) => { installCalls.push(spec) } }
+  const svcD = createSyncService({ dshRoot: machineD, pluginManager: () => fakeManager })
+
+  const updStatus = await svcD.describeUpdate({})
+  if (updStatus.reason === 'unreachable') {
+    console.log('· 跳过：问不到远端仓库（这一步需要网络，离线时不算失败）')
+  } else {
+    check('认得出这个插件是从哪条依赖装的', updStatus.installedSpec === REPO_SPEC,
+      `实际：${updStatus.installedSpec}`)
+    check('问得到远端最新的提交号', /^[0-9a-f]{40}$/.test(updStatus.remoteCommit ?? ''),
+      `远端 HEAD=${updStatus.remoteCommit}`)
+
+    const updPlan = await svcD.prepareUpdate({})
+    check('算出来的是「带具体提交号的依赖写法」',
+      updPlan.nextSpec === `${REPO_SPEC}#${updStatus.remoteCommit}`,
+      `实际：${updPlan.nextSpec}`)
+    check('只检查、不确认时，一个包都不会被装', installCalls.length === 0)
+
+    // 没有插件管理服务时不能假装成功：给一句能照做的改法，才是可行动的错误。
+    const svcNoMgr = createSyncService({ dshRoot: machineD })
+    let manual = null
+    try {
+      await svcNoMgr.applyUpdate(updPlan)
+    } catch (error) {
+      manual = error
+    }
+    check('拿不到插件管理服务时不假装成功，而是给出可照做的改法',
+      manual?.code === 'update-unavailable' && manual?.nextSpec === updPlan.nextSpec,
+      `实际：${manual?.code ?? '没有报错'}`)
+
+    const updDone = await svcD.applyUpdate(updPlan)
+    check('更新请求真的交给了插件管理服务，且用的是带提交号的那条',
+      installCalls.length === 1 && installCalls[0] === updPlan.nextSpec,
+      `实际：${installCalls.join(', ')}`)
+    check('更新结果说清了更新到哪一版，以及要重启',
+      updDone.updated === true && updDone.to === updPlan.remoteCommit.slice(0, 7))
+
+    // 锁文件记下了当前提交时，就不该再报「有新版本」——否则会无休止地让人点更新。
+    writeLock(updStatus.remoteCommit)
+    const fresh = await svcD.describeUpdate({})
+    check('已经是远端最新时不谎报有新版本', fresh.reason === 'up-to-date' && fresh.needsUpdate === false,
+      `实际：${fresh.reason}`)
+  }
 
   // ---------- 汇总 ----------
   const failed = checks.filter(c => !c.passed)

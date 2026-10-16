@@ -142,6 +142,8 @@ window.__ModuleLoader__.load({
           importConfirm: '正在写回本机…',
           editPrepare: '正在核对改了什么…',
           editConfirm: '正在写回配置…',
+          updateCheck: '正在问远端最新版本…',
+          updateApply: '正在更新…',
           pushConfirm: '正在推送…',
           pullConfirm: '正在应用…',
         },
@@ -155,6 +157,7 @@ window.__ModuleLoader__.load({
           confirmPull: '确认拉取',
           confirmImport: '确认导入',
           confirmEdit: '确认改动',
+          confirmUpdate: '确认更新',
           cancel: '取消',
           copy: '复制路径',
           copied: '已复制',
@@ -164,6 +167,7 @@ window.__ModuleLoader__.load({
           pull: '云端有 {remote} 条配置，其中 {n} 项与本机不同。确认后改动本机。',
           import: '将写回 {n} 项，本机原有的监听地址、主题等不受影响。确认后改动本机。',
           edit: '将改动 {n} 处配置。确认后写入并重跑插件。',
+          update: '会把依赖改成 {spec}，更新完要重启 DSH。确认后开始更新。',
         },
         compat: {
           blocked: '上面这些必须先处理：直接写下去不会报错，但也不会生效。',
@@ -175,6 +179,16 @@ window.__ModuleLoader__.load({
           removed: '（删除这一项）',
           noop: '跟原来一样，没有需要改的。',
         },
+        update: {
+          title: '插件自身',
+          installed: '当前版本 {short}',
+          unknown: '认不出当前版本：依赖清单里没有记下提交号。',
+          noSpec: '这个 profile 的依赖清单里没有本插件，认不出它是怎么装进来的。',
+          notGit: '这一份是本地链接安装的，改完代码重启 DSH 即可，不用在这里更新。',
+          check: '检查更新',
+          available: '有新版本：{from} → {to}',
+          availableUnknown: '有新版本：{to}（当前这一版认不出来）',
+        },
         preview: {
           title: '预览',
           empty: '还没有内容。点下面的「导出到文件」，先看看会带走什么。',
@@ -185,7 +199,12 @@ window.__ModuleLoader__.load({
         actions: { title: '操作' },
         overview: { title: '这次同步了什么' },
         skips: { title: '这些项留在了本机' },
-        result: { done: '操作已完成。', exported: '已导出 {total} 项。' },
+        result: {
+          done: '操作已完成。',
+          exported: '已导出 {total} 项。',
+          updated: '已更新到 {to}。重启 DSH 后生效。',
+          upToDate: '已经是最新版本（{from}）。',
+        },
       },
       en: {
         meta: {
@@ -242,6 +261,8 @@ window.__ModuleLoader__.load({
           importConfirm: 'Writing back to this machine…',
           editPrepare: 'Checking what changed…',
           editConfirm: 'Writing the change…',
+          updateCheck: 'Asking the remote for the latest commit…',
+          updateApply: 'Updating…',
           pushConfirm: 'Pushing…',
           pullConfirm: 'Applying…',
         },
@@ -255,6 +276,7 @@ window.__ModuleLoader__.load({
           confirmPull: 'Confirm pull',
           confirmImport: 'Confirm import',
           confirmEdit: 'Confirm change',
+          confirmUpdate: 'Confirm update',
           cancel: 'Cancel',
           copy: 'Copy path',
           copied: 'Copied',
@@ -264,6 +286,7 @@ window.__ModuleLoader__.load({
           pull: 'The cloud holds {remote} entries, {n} of them differing from this machine. Confirm to change this machine.',
           import: 'This writes {n} items. This machine\u2019s own listen address, theme, and so on are left alone. Confirm to change this machine.',
           edit: 'This changes {n} settings. Confirm to write them and reload the plugin.',
+          update: 'The dependency will be set to {spec}; DSH must be restarted afterwards. Update now?',
         },
         compat: {
           blocked: 'Fix the items above first: writing them now would silently do nothing.',
@@ -275,6 +298,16 @@ window.__ModuleLoader__.load({
           removed: '(remove this entry)',
           noop: 'No change from the current settings.',
         },
+        update: {
+          title: 'This plugin',
+          installed: 'Installed {short}',
+          unknown: 'The installed commit is unknown: the profile manifest records no commit for it.',
+          noSpec: 'This profile does not list the plugin as a dependency, so the installed version cannot be told.',
+          notGit: 'This copy is a local link install. Edit the code and restart DSH instead.',
+          check: 'Check for updates',
+          available: 'Newer version available: {from} → {to}',
+          availableUnknown: 'Newer version available: {to} (the installed one cannot be identified)',
+        },
         preview: {
           title: 'Preview',
           empty: 'Nothing yet. Use \u201cExport to file\u201d below to see what would be taken.',
@@ -285,7 +318,12 @@ window.__ModuleLoader__.load({
         actions: { title: 'Actions' },
         overview: { title: 'What this sync covered' },
         skips: { title: 'These stayed on this machine' },
-        result: { done: 'Done.', exported: 'Exported {total} items.' },
+        result: {
+          done: 'Done.',
+          exported: 'Exported {total} items.',
+          updated: 'Updated to {to}. Restart DSH for it to take effect.',
+          upToDate: 'Already up to date ({from}).',
+        },
       },
     }
 
@@ -301,6 +339,7 @@ window.__ModuleLoader__.load({
       push: '/api/settings-roam.push',
       pull: '/api/settings-roam.pull',
       edit: '/api/settings-roam.edit',
+      update: '/api/settings-roam.update',
     }
 
     /**
@@ -338,6 +377,13 @@ window.__ModuleLoader__.load({
         busyConfirm: 'busy.editConfirm',
         confirmLabel: 'action.confirmEdit',
         pending: 'pending.edit',
+      },
+      update: {
+        route: ROUTES.update,
+        busyPrepare: 'busy.updateCheck',
+        busyConfirm: 'busy.updateApply',
+        confirmLabel: 'action.confirmUpdate',
+        pending: 'pending.update',
       },
     }
 
@@ -379,6 +425,31 @@ window.__ModuleLoader__.load({
     function compatNotable(compat) {
       if (!compat || !Array.isArray(compat.items)) return []
       return compat.items.filter(entry => entry?.level !== 'ok')
+    }
+
+    /**
+     * 「插件自身」那行小字要说什么。
+     *
+     * 只说**已经知道**的事：装的是哪一条依赖、装在哪一版。
+     * 「有没有新版」必须问过远端才知道，而状态接口刻意不联网——
+     * 猜一句「有新版本」很容易，但那是一句假话，用户点下去只会白等一轮。
+     * @returns {string|null} null 表示这一份认不出安装方式，整行不显示
+     */
+    /** 提交号认不出来时用「未知版本」顶上——不要留一段空白，那看着像界面坏了。 */
+    function shortOr(value) {
+      return typeof value === 'string' && value !== '' ? value : '未知版本'
+    }
+
+    function updateNote(state, t) {
+      const info = state?.status?.update
+      if (!info || typeof info !== 'object') return null
+      if (typeof info.installedSpec !== 'string' || info.installedSpec === '') return null
+      if (info.reason === 'no-spec') return t('update.noSpec')
+      if (info.reason === 'not-git') return t('update.notGit')
+      if (typeof info.installedCommit !== 'string' || info.installedCommit === '') {
+        return t('update.unknown')
+      }
+      return t('update.installed', { short: info.installedCommit.slice(0, 7) })
     }
 
     function normalizeRefused(items) {
@@ -469,6 +540,9 @@ window.__ModuleLoader__.load({
       '.roam-block{display:flex;flex-direction:column;gap:12px}',
       '.roam-preview .roam-skips{margin-top:4px}',
       '.roam-actions-card .roam-pending{border:0;background:transparent;padding:0}',
+      '.roam-update{display:flex;align-items:center;gap:10px;margin-top:2px;padding-top:12px;border-top:0.5px solid var(--dsw-alias-border-l3)}',
+      '.roam-update-note{margin:0;flex:1;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
+      '.roam-update-line{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
     ].join('')
 
     /**
@@ -590,6 +664,11 @@ window.__ModuleLoader__.load({
           return { dot: 'warning', tone: 'warning', text: t('status.review') }
         case 'done':
           return { dot: 'done', tone: 'done', text: state.text ?? t('result.done') }
+        // clean 既可能来自「本机与云端一致」，也可能来自「这一次动作没产生变化」
+        // （编辑时没改东西、检查更新时已经是最新）。后者必须能自己说话——
+        // 统一显示「已与本机一致」，用户会以为自己的操作跑偏了。
+        case 'clean':
+          return { dot: 'done', tone: 'done', text: state.text ?? t('status.clean') }
         default:
           return { dot: 'done', tone: 'done', text: t('status.clean') }
       }
@@ -887,7 +966,7 @@ window.__ModuleLoader__.load({
      * 这段就是那个「确认点」——它在界面上存在，才说明确认真的发生过。
      * 确认时把 token 一起带上，宿主据此判断「确认的就是看过的那一份」。
      */
-    function Pending({ state, actions, t }) {
+    function Pending({ state, actions, t = makeT('zh') }) {
       const p = state?.pending
       if (!p) return null
       const notable = compatNotable(p.compat)
@@ -896,6 +975,17 @@ window.__ModuleLoader__.load({
         'div',
         { className: 'roam-card roam-pending' },
         h('p', { className: 'roam-pending-text' }, p.text),
+        // 更新与其它动作不同：它换的是「这个插件从哪来」。
+        // 只给一句「确认吗」，用户没法判断这跟自己装的那一版差了多少。
+        p.update
+          ? h(
+            'p',
+            { className: 'roam-update-line roam-mono' },
+            p.update.from === null || p.update.from === undefined
+              ? t('update.availableUnknown', { to: p.update.to })
+              : t('update.available', { from: p.update.from, to: p.update.to }),
+          )
+          : null,
         notable.length > 0
           ? h(
             'ul',
@@ -1048,6 +1138,9 @@ window.__ModuleLoader__.load({
       // 未配置云端仓库时不给可点的「拉取」「推送」：点下去必然失败，
       // 而失败的表现和「按钮没接上线」在用户眼里是同一件事。
       const cloudReady = state?.status?.configured !== false && !disabled
+      // 更新插件自己与「同步内容」是两件事，所以单独一行、不挤进上面那排按钮：
+      // 上面四个按钮动的是配置，这一个动的是插件本身。
+      const note = updateNote(state, t)
       return h(
         'div',
         { className: 'roam-card roam-actions-card' },
@@ -1078,6 +1171,18 @@ window.__ModuleLoader__.load({
             t('action.push'),
           ),
         ),
+        note === null
+          ? null
+          : h(
+            'div',
+            { className: 'roam-update' },
+            h('p', { className: 'roam-update-note' }, note),
+            h(
+              Button,
+              { variant: 'ghost', size: 'sm', disabled, onClick: () => actions?.onUpdate?.() },
+              t('update.check'),
+            ),
+          ),
         h(Pending, { state, actions, t }),
       )
     }
@@ -1350,6 +1455,51 @@ window.__ModuleLoader__.load({
         }
       }, [t])
 
+      /**
+       * 更新插件自己。
+       *
+       * 与其它动作最大的不同：它改的是「这个插件从哪来」，不是配置内容，
+       * 而且改完必须重启 DSH 才生效。所以确认文案里把这一点明写出来——
+       * 否则用户更新完看到界面一点没变，只会以为更新没成功，然后再点一次。
+       *
+       * 检查这步要联网（问远端的 HEAD 提交），所以它是单独一次点击，
+       * 不在打开设置页时顺手做掉。
+       */
+      const beginUpdate = React.useCallback(async () => {
+        setState(current => ({ kind: 'busy', text: t('busy.updateCheck'), status: current.status }))
+        try {
+          const checked = await request(ROUTES.update, { step: 'check' })
+          if (checked.needsUpdate !== true) {
+            // 已经是最新：这也是一次成功的结果，不是「什么都没发生」。
+            setState(current => ({
+              kind: 'clean',
+              text: t('result.upToDate', { from: shortOr(checked.from) }),
+              status: current.status,
+            }))
+            return
+          }
+          setState(current => ({
+            kind: 'review',
+            count: 0,
+            status: current.status,
+            overview: current.overview ?? null,
+            skipped: current.skipped ?? [],
+            pending: {
+              kind: 'update',
+              token: checked.token,
+              compat: null,
+              // from 认不出来时保持 null，交给 Pending 挑句子——
+              // 填个 '?' 会被当成正常值，最后渲染出「有新版本：? → ca727d9」。
+              update: { from: checked.from ?? null, to: checked.to ?? null },
+              confirmLabel: t('action.confirmUpdate'),
+              text: t('pending.update', { spec: checked.nextSpec ?? '' }),
+            },
+          }))
+        } catch (error) {
+          setState(current => ({ kind: 'error', message: error.message, status: current.status }))
+        }
+      }, [t])
+
       const confirm = React.useCallback(async () => {
         const pending = state.pending
         if (!pending) return
@@ -1361,6 +1511,17 @@ window.__ModuleLoader__.load({
         }))
         try {
           const done = await request(spec.route, { step: 'confirm', token: pending.token })
+          if (pending.kind === 'update') {
+            // 换的是磁盘上的依赖，内存里跑着的还是旧的那一份。
+            // 说清「重启后生效」，不然用户接下来看到的每一处都还是老样子。
+            setState(current => ({
+              kind: 'done',
+              text: t('result.updated', { to: shortOr(done.to) }),
+              status: current.status,
+            }))
+            void load()
+            return
+          }
           setState(current => ({
             kind: 'done',
             text: t('result.done'),
@@ -1395,6 +1556,7 @@ window.__ModuleLoader__.load({
         onPull: () => begin('pull'),
         onConfirm: confirm,
         onEdit: beginEdit,
+        onUpdate: beginUpdate,
         onCancel: () => setState(current => ({ ...current, pending: null })),
         onCopyPath: (path) => {
           try {
@@ -1498,6 +1660,9 @@ window.__ModuleLoader__.load({
       Pending,
       SectionContainer,
       compatNotable,
+      updateNote,
+      shortOr,
+      describeStatus,
       formatFieldValue,
       formatChange,
       LOCALES,
