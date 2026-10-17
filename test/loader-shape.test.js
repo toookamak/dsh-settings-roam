@@ -970,6 +970,29 @@ test('云端对比结果显示本地/云端时间与差异，零差异时明确�
   assert.match(JSON.stringify(same), /云端与本机一致/)
 })
 
+test('云端没有快照时说清「这不是真正的差异」，并报出对比目标与差异条数', async () => {
+  const exported = await loadClient('comparison-empty-cloud')
+  const text = JSON.stringify(render(exported.Section({
+    state: {
+      kind: 'clean',
+      status: { configured: true },
+      comparison: {
+        localConfigModifiedAt: '2026-10-14T12:00:00.000Z',
+        remoteUploadedAt: null,
+        remoteSnapshotExists: false,
+        remoteDescription: 'git 仓库 https://example.com/x.git（分支 dsh-settings-roam）',
+        summary: { add: 3, modify: 0, delete: 0, total: 3 },
+        diff: [{ path: 'config/profile.patch.yml', action: 'add', summary: '云端缺少：配置' }],
+      },
+    },
+    actions: {},
+  })))
+  assert.match(text, /对比目标/)
+  assert.match(text, /分支 dsh-settings-roam/)
+  assert.match(text, /这不是真正的差异/)
+  assert.match(text, /差异共 3 项：新增 3、修改 0、删除 0/)
+})
+
 // ─── 更新插件自己（用户要求「每次卸载重装太麻烦」）──────────────────
 // 更新与同步是两件事：上面那排按钮动的是配置内容，这一个动的是插件本身。
 // 混在一排里，用户会以为「推送」也会把插件一起更新。

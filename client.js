@@ -136,6 +136,9 @@ window.__ModuleLoader__.load({
         comparison: {
           title: '云端对比结果',
           same: '云端与本机一致。',
+          target: '对比目标',
+          counts: '差异共 {total} 项：新增 {add}、修改 {modify}、删除 {delete}',
+          cloudEmpty: '云端这条分支上还没有快照（可能是分支配错了，也可能从未推送过）——下面会把本机全部内容列为「云端缺少」，这不是真正的差异。',
           localTime: '本地关注配置最后修改',
           remoteTime: '云端最后上传',
           localTimeHint: '时间为配置文件级修改时间，不是单个字段的审计时间。',
@@ -265,6 +268,9 @@ window.__ModuleLoader__.load({
         comparison: {
           title: 'Cloud comparison',
           same: 'The cloud and this machine match.',
+          target: 'Compared with',
+          counts: '{total} change(s): {add} added, {modify} modified, {delete} removed',
+          cloudEmpty: 'This branch has no snapshot in the cloud yet — the branch may be wrong, or nothing was ever pushed. Every local file is listed as missing in the cloud, which is not a real difference.',
           localTime: 'Local tracked settings last modified',
           remoteTime: 'Cloud last uploaded',
           localTimeHint: 'File-level modification time, not a per-field audit time.',
@@ -1240,12 +1246,28 @@ window.__ModuleLoader__.load({
     function ComparisonBlock({ result, t = makeT('zh') }) {
       if (!result) return null
       const formatTime = value => value ? new Date(value).toLocaleString() : t('comparison.never')
+      const counts = result.summary
       return h('div', { className: 'roam-card' },
         h('p', { className: 'roam-card-title' }, t('comparison.title')),
+        // 比的是哪个仓库的哪条分支，是这一块最该先说的话：分支配错时，
+        // 用户看到的会是「云端什么都没有」，而不是「我刚改的那条分支」。
+        result.remoteDescription
+          ? h('p', null, `${t('comparison.target')}：${result.remoteDescription}`)
+          : null,
         h('p', null, `${t('comparison.localTime')}：${formatTime(result.localConfigModifiedAt)}`),
         h('small', null, t('comparison.localTimeHint')),
         h('p', null, `${t('comparison.remoteTime')}：${formatTime(result.remoteUploadedAt)}`),
         h('small', null, t('comparison.remoteTimeHint')),
+        // 云端这条分支还没有快照时，「全部内容都在云端缺失」不是真正的差异，
+        // 必须先说清楚，否则一屏差异会被当成「云端确实和本机不一样」。
+        result.remoteSnapshotExists === false
+          ? h('p', { className: 'roam-intro' }, t('comparison.cloudEmpty'))
+          : null,
+        counts && result.diff.length > 0
+          ? h('p', null, t('comparison.counts', {
+            total: counts.total, add: counts.add, modify: counts.modify, delete: counts.delete,
+          }))
+          : null,
         result.diff.length === 0
           ? h('p', null, t('comparison.same'))
           : h('ul', null, result.diff.map(item => h('li', { key: `${item.path}:${item.action}` }, item.summary))),

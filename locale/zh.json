@@ -47,6 +47,9 @@
   "comparison": {
     "title": "云端对比结果",
     "same": "云端与本机一致。",
+    "target": "对比目标",
+    "counts": "差异共 {total} 项：新增 {add}、修改 {modify}、删除 {delete}",
+    "cloudEmpty": "云端这条分支上还没有快照（可能是分支配错了，也可能从未推送过）——下面会把本机全部内容列为「云端缺少」，这不是真正的差异。",
     "localTime": "本地关注配置最后修改",
     "remoteTime": "云端最后上传",
     "localTimeHint": "时间为配置文件级修改时间，不是单个字段的审计时间。",

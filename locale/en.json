@@ -47,6 +47,9 @@
   "comparison": {
     "title": "Cloud comparison",
     "same": "The cloud and this machine match.",
+    "target": "Compared with",
+    "counts": "{total} change(s): {add} added, {modify} modified, {delete} removed",
+    "cloudEmpty": "This branch has no snapshot in the cloud yet — the branch may be wrong, or nothing was ever pushed. Every local file is listed as missing in the cloud, which is not a real difference.",
     "localTime": "Local tracked settings last modified",
     "remoteTime": "Cloud last uploaded",
     "localTimeHint": "File-level modification time, not a per-field audit time.",

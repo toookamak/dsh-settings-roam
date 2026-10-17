@@ -89,6 +89,8 @@ test('compareWithRemote 只读对比并返回本地文件时间与云端提交�
   assert.equal(result.comparedWithRemote, true)
   assert.equal(result.localConfigModifiedAt, statSync(patchFile).mtime.toISOString())
   assert.equal(result.remoteUploadedAt, '2026-10-13T12:00:00.000Z')
+  assert.equal(result.remoteSnapshotExists, false, '云端没有快照这件事必须能报出来，否则界面只能把本机全量当成差异')
+  assert.equal(result.remoteDescription, '假后端', '要说清比的是哪个仓库哪条分支')
   assert.ok(result.diff.length >= 1)
   assert.equal(readFileSync(patchFile, 'utf8'), before, '对比不能改本机配置')
   assert.deepEqual(remote.files, {}, '对比不能写入云端')
@@ -102,6 +104,7 @@ test('没有 Git 时间能力时不把快照生成时间伪称上传时间', asy
   const result = await service.compareWithRemote()
   assert.equal(result.remoteUploadedAt, null)
   assert.equal(result.remoteSnapshotGeneratedAt, '2026-01-01T00:00:00.000Z')
+  assert.equal(result.remoteSnapshotExists, true)
   rmSync(root, { recursive: true })
 })
 

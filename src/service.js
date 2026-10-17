@@ -756,6 +756,12 @@ async function crossCheck() {
     /**
      * 只读地比较本机可移植配置与云端快照。
      * 返回的本地时间是 cordis.patch.yml 的 mtime（文件级时间，不代表每个字段的独立修改时间）。
+     *
+     * 另外回两个「说清对比对象」的字段，都是实测逼出来的：
+     *   - remoteDescription：比的是哪个仓库的哪条分支。分支配错时，
+     *     用户看到的会是「云端什么都没有」，而不是「我刚才改的那条分支」。
+     *   - remoteSnapshotExists：云端这条分支上到底有没有快照。
+     *     没有时不能把「全部分本机内容」当成真正的差异来呈现。
      */
     async compareWithRemote() {
       const backend = requireBackend()
@@ -791,6 +797,8 @@ async function crossCheck() {
           ? await backend.lastUploadAt()
           : null,
         remoteSnapshotGeneratedAt: remoteSnapshot.generatedAt ?? null,
+        remoteSnapshotExists: remoteText !== null,
+        remoteDescription: typeof backend.describe === 'function' ? backend.describe() : null,
       }
     },
 
