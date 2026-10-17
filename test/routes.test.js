@@ -17,7 +17,7 @@ import { ROUTES, ROUTE_PREFIX, describeRoutes, createRouteHandlers } from '../sr
 function fakeService(overrides = {}) {
   const calls = {
     preparePush: 0, confirmPush: 0, preparePull: 0, applyPull: 0,
-    prepareImport: 0, applyImport: 0,
+    prepareImport: 0, applyImport: 0, compareWithRemote: 0,
     prepareImportArgs: [], applyImportArgs: [],
   }
   const base = {
@@ -26,6 +26,10 @@ function fakeService(overrides = {}) {
     defaultExportRoot: () => '/home/u/.dsh/settings-roam/export',
     defaultBackupRoot: () => '/home/u/.dsh/settings-roam/backup',
     describeProfile: () => ({ name: 'web', auto: true }),
+    compareWithRemote: async () => {
+      calls.compareWithRemote += 1
+      return { diff: [], summary: { add: 0, modify: 0, delete: 0, total: 0 }, comparedWithRemote: true, localConfigModifiedAt: '2026-10-14T12:00:00.000Z', remoteUploadedAt: '2026-10-13T12:00:00.000Z' }
+    },
     prepareInspect: async () => ({
       patchFile: '/home/u/.dsh/profiles/web/cordis.patch.yml',
       patchExists: true,
@@ -144,6 +148,21 @@ const post = (path, body) => new Request(`http://localhost${path}`, {
 })
 
 // ─── 只读现状 ────────────────────────────────────────────────────────
+
+test('云端对比只返回差异与时间，不进入推送/拉取确认流程', async () => {
+  const d = deps()
+  const handlers = createRouteHandlers(d)
+  const response = await handlers.fetch(post(ROUTES.compare, {}))
+  const body = await response.json()
+  assert.equal(response.status, 200)
+  assert.equal(body.comparedWithRemote, true)
+  assert.equal(body.localConfigModifiedAt, '2026-10-14T12:00:00.000Z')
+  assert.equal(body.remoteUploadedAt, '2026-10-13T12:00:00.000Z')
+  assert.equal(d.calls.compareWithRemote, 1)
+  assert.equal(d.calls.preparePush, 0)
+  assert.equal(d.calls.confirmPush, 0)
+  assert.equal(d.calls.applyPull, 0)
+})
 
 test('status 未配置云端时依然可用 —— 第一阶段不联网也要能取到配置', async () => {
   const d = deps({ isConfigured: () => false })
@@ -369,11 +388,11 @@ test('内部异常回一句可显示的话，不带堆栈与绝对路径', async
   assert.ok(!/\bat\s+\w+.*:\d+:\d+/.test(body.error), '不得把堆栈回给界面')
 })
 
-test('describeRoutes 给出七条路由，方法与路径齐全', () => {
+test('describeRoutes 给出八条路由，方法与路径齐全', () => {
   const routes = describeRoutes(deps())
   assert.deepEqual(
     routes.map(r => r.path),
-    [ROUTES.status, ROUTES.export, ROUTES.import, ROUTES.push, ROUTES.pull, ROUTES.edit, ROUTES.update],
+    [ROUTES.status, ROUTES.export, ROUTES.import, ROUTES.push, ROUTES.pull, ROUTES.edit, ROUTES.update, ROUTES.compare],
   )
   assert.deepEqual(routes[0].methods, ['GET'])
   assert.deepEqual(routes[1].methods, ['POST'])
@@ -382,6 +401,7 @@ test('describeRoutes 给出七条路由，方法与路径齐全', () => {
   assert.deepEqual(routes[4].methods, ['POST'])
   assert.deepEqual(routes[5].methods, ['POST'])
   assert.deepEqual(routes[6].methods, ['POST'])
+  assert.deepEqual(routes[7].methods, ['POST'])
   for (const r of routes) {
     assert.equal(typeof r.fetch, 'function')
     assert.equal(r.requestBody, 'buffered')

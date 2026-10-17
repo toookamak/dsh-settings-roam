@@ -38,11 +38,20 @@
     "loading": "正在读取本机配置…",
     "needsConfig": "还没配置云端仓库。在下面的「云端仓库」里填上地址，就能推送了。",
     "emptyCloud": "云端还没有内容。先在这台机器上导出或推送一次。",
-    "clean": "已与本机一致。",
+    "clean": "本机配置已读取；是否与云端一致请执行「与云端对比」。",
     "diff": "云端有 {n} 项变化待拉取。",
     "review": "请核对上面的差异，确认后才会真正写入。",
     "needsProfile": "这台机器上有多个 profile，在第一块里选一个要同步的。",
     "error": "操作失败，请重试。"
+  },
+  "comparison": {
+    "title": "云端对比结果",
+    "same": "云端与本机一致。",
+    "localTime": "本地关注配置最后修改",
+    "remoteTime": "云端最后上传",
+    "localTimeHint": "时间为配置文件级修改时间，不是单个字段的审计时间。",
+    "remoteTimeHint": "按快照文件最近一次 Git 提交时间计算。",
+    "never": "未知 / 暂无记录"
   },
   "busy": {
     "status": "正在读取本机配置…",
@@ -63,6 +72,7 @@
     "import": "导入",
     "pull": "拉取",
     "push": "推送",
+    "compare": "与云端对比",
     "confirm": "确认",
     "confirmPush": "确认推送",
     "confirmPull": "确认拉取",
@@ -92,7 +102,7 @@
   },
   "update": {
     "title": "插件自身",
-    "installed": "当前版本 {short}",
+    "installed": "当前版本 {label}",
     "unknown": "认不出当前版本：依赖清单里没有记下提交号。",
     "noSpec": "这个 profile 的依赖清单里没有本插件，认不出它是怎么装进来的。",
     "notGit": "这一份是本地链接安装的，改完代码重启 DSH 即可，不用在这里更新。",

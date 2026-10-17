@@ -127,11 +127,20 @@ window.__ModuleLoader__.load({
           loading: '正在读取本机配置…',
           needsConfig: '还没配置云端仓库。在下面的「云端仓库」里填上地址，就能推送了。',
           emptyCloud: '云端还没有内容。先在这台机器上导出或推送一次。',
-          clean: '已与本机一致。',
+          clean: '本机配置已读取；是否与云端一致请执行「与云端对比」。',
           diff: '云端有 {n} 项变化待拉取。',
           review: '请核对上面的差异，确认后才会真正写入。',
           needsProfile: '这台机器上有多个 profile，在第一块里选一个要同步的。',
           error: '操作失败，请重试。',
+        },
+        comparison: {
+          title: '云端对比结果',
+          same: '云端与本机一致。',
+          localTime: '本地关注配置最后修改',
+          remoteTime: '云端最后上传',
+          localTimeHint: '时间为配置文件级修改时间，不是单个字段的审计时间。',
+          remoteTimeHint: '按快照文件最近一次 Git 提交时间计算。',
+          never: '未知 / 暂无记录',
         },
         busy: {
           status: '正在读取本机配置…',
@@ -152,6 +161,7 @@ window.__ModuleLoader__.load({
           import: '导入',
           pull: '拉取',
           push: '推送',
+          compare: '与云端对比',
           confirm: '确认',
           confirmPush: '确认推送',
           confirmPull: '确认拉取',
@@ -181,7 +191,7 @@ window.__ModuleLoader__.load({
         },
         update: {
           title: '插件自身',
-          installed: '当前版本 {short}',
+          installed: '当前版本 {label}',
           unknown: '认不出当前版本：依赖清单里没有记下提交号。',
           noSpec: '这个 profile 的依赖清单里没有本插件，认不出它是怎么装进来的。',
           notGit: '这一份是本地链接安装的，改完代码重启 DSH 即可，不用在这里更新。',
@@ -246,11 +256,20 @@ window.__ModuleLoader__.load({
           loading: 'Reading local settings…',
           needsConfig: 'No cloud repository yet. Fill in the repository URL under \u201cCloud repository\u201d below to enable pushing.',
           emptyCloud: 'The cloud is still empty. Export or push once from this machine first.',
-          clean: 'In sync with this machine.',
+          clean: 'Local settings loaded; use Compare with cloud to verify sync status.',
           diff: '{n} changes on the cloud are waiting to be pulled.',
           review: 'Check the differences above; nothing is written until you confirm.',
           needsProfile: 'This machine has several profiles — pick the one to sync in the first block.',
           error: 'The operation failed. Try again.',
+        },
+        comparison: {
+          title: 'Cloud comparison',
+          same: 'The cloud and this machine match.',
+          localTime: 'Local tracked settings last modified',
+          remoteTime: 'Cloud last uploaded',
+          localTimeHint: 'File-level modification time, not a per-field audit time.',
+          remoteTimeHint: 'Based on the latest Git commit that changed the snapshot file.',
+          never: 'Unknown / no record',
         },
         busy: {
           status: 'Reading local settings…',
@@ -271,6 +290,7 @@ window.__ModuleLoader__.load({
           import: 'Import',
           pull: 'Pull',
           push: 'Push',
+          compare: 'Compare with cloud',
           confirm: 'Confirm',
           confirmPush: 'Confirm push',
           confirmPull: 'Confirm pull',
@@ -300,7 +320,7 @@ window.__ModuleLoader__.load({
         },
         update: {
           title: 'This plugin',
-          installed: 'Installed {short}',
+          installed: 'Installed {label}',
           unknown: 'The installed commit is unknown: the profile manifest records no commit for it.',
           noSpec: 'This profile does not list the plugin as a dependency, so the installed version cannot be told.',
           notGit: 'This copy is a local link install. Edit the code and restart DSH instead.',
@@ -340,6 +360,7 @@ window.__ModuleLoader__.load({
       pull: '/api/settings-roam.pull',
       edit: '/api/settings-roam.edit',
       update: '/api/settings-roam.update',
+      compare: '/api/settings-roam.compare',
     }
 
     /**
@@ -449,7 +470,13 @@ window.__ModuleLoader__.load({
       if (typeof info.installedCommit !== 'string' || info.installedCommit === '') {
         return t('update.unknown')
       }
-      return t('update.installed', { short: info.installedCommit.slice(0, 7) })
+      const short = info.installedCommit.slice(0, 7)
+      // 主机半侧读不出自身版本号时只报提交号，而不是编一个版本号：
+      // 版本号的作用就是让人分辨构建，编一个比留空更糟。
+      const label = typeof info.pluginVersion === 'string' && info.pluginVersion !== ''
+        ? `v${info.pluginVersion} (${short})`
+        : short
+      return t('update.installed', { label })
     }
 
     function normalizeRefused(items) {
@@ -1176,6 +1203,11 @@ window.__ModuleLoader__.load({
           ),
           h(
             Button,
+            { variant: 'outline', size: 'md', disabled: !cloudReady, onClick: () => actions?.onCompare?.() },
+            t('action.compare'),
+          ),
+          h(
+            Button,
             { variant: 'outline', size: 'md', icon: IconPush, disabled: !cloudReady, onClick: () => actions?.onPush?.() },
             t('action.push'),
           ),
@@ -1205,6 +1237,21 @@ window.__ModuleLoader__.load({
      * 顶在前面会把每天要看的预览挤到需要滚动才能看到的位置。
      * @param {object} props
      */
+    function ComparisonBlock({ result, t = makeT('zh') }) {
+      if (!result) return null
+      const formatTime = value => value ? new Date(value).toLocaleString() : t('comparison.never')
+      return h('div', { className: 'roam-card' },
+        h('p', { className: 'roam-card-title' }, t('comparison.title')),
+        h('p', null, `${t('comparison.localTime')}：${formatTime(result.localConfigModifiedAt)}`),
+        h('small', null, t('comparison.localTimeHint')),
+        h('p', null, `${t('comparison.remoteTime')}：${formatTime(result.remoteUploadedAt)}`),
+        h('small', null, t('comparison.remoteTimeHint')),
+        result.diff.length === 0
+          ? h('p', null, t('comparison.same'))
+          : h('ul', null, result.diff.map(item => h('li', { key: `${item.path}:${item.action}` }, item.summary))),
+      )
+    }
+
     function Section({ state, actions, t = makeT('zh') }) {
       return h(
         'div',
@@ -1218,6 +1265,7 @@ window.__ModuleLoader__.load({
         h(StatusLine, { state, t }),
         h(PreviewBlock, { state, actions, t, form: state?.form }),
         h(ActionBlock, { state, actions, t }),
+        h(ComparisonBlock, { result: state?.comparison, t }),
         state?.form ? h(ConfigCard, { form: state.form, t, onSaved: actions?.onSaved }) : null,
         h(EditCard, { entry: state?.editable, t, onEdit: actions?.onEdit }),
       )
@@ -1369,6 +1417,16 @@ window.__ModuleLoader__.load({
        * 它只往导出目录写副本，不改本机配置也不碰远端，所以没有需要用户
        * 点头的地方。结果同样给概述与落盘路径——用户据此去打开核对。
        */
+      const compareWithCloud = React.useCallback(async () => {
+        setState(current => ({ kind: 'busy', text: t('busy.pullPrepare'), status: current.status, comparison: current.comparison }))
+        try {
+          const result = await request(ROUTES.compare, {})
+          setState(current => ({ ...current, kind: 'clean', status: current.status, comparison: result }))
+        } catch (error) {
+          setState(current => ({ ...current, kind: 'error', message: error.message, status: current.status }))
+        }
+      }, [t])
+
       const beginExport = React.useCallback(async () => {
         setState(current => ({ kind: 'busy', text: t('busy.export'), status: current.status }))
         try {
@@ -1566,6 +1624,7 @@ window.__ModuleLoader__.load({
         onImport: () => begin('import'),
         onPush: () => begin('push'),
         onPull: () => begin('pull'),
+        onCompare: compareWithCloud,
         onConfirm: confirm,
         onEdit: beginEdit,
         onUpdate: beginUpdate,

@@ -29,6 +29,7 @@ function fakeBackend(initial = {}) {
     async push(message) { this.lastPush = message; return { committed: true } },
     async readFile(p) { return files[p] ?? null },
     async writeFile(p, c) { files[p] = c },
+    async lastUploadAt() { return null },
     describe() { return '假后端' },
   }
 }
@@ -75,6 +76,32 @@ test('preparePush 的差异列表供界面展示', async () => {
   assert.ok(Array.isArray(plan.diff), '应给出差异列表')
   assert.ok(typeof plan.summary === 'object', '应给出差异汇总')
   assert.ok(plan.summary.total >= 1, '首次推送应有新增项')
+  rmSync(root, { recursive: true })
+})
+
+test('compareWithRemote 只读对比并返回本地文件时间与云端提交时间', async () => {
+  const { root, dshRoot, skillsRoot, workDir, patchFile } = sandbox()
+  const remote = fakeBackend()
+  remote.lastUploadAt = async () => '2026-10-13T12:00:00.000Z'
+  const service = createSyncService({ backend: remote, workDir, dshRoot, skillsRoot })
+  const before = readFileSync(patchFile, 'utf8')
+  const result = await service.compareWithRemote()
+  assert.equal(result.comparedWithRemote, true)
+  assert.equal(result.localConfigModifiedAt, statSync(patchFile).mtime.toISOString())
+  assert.equal(result.remoteUploadedAt, '2026-10-13T12:00:00.000Z')
+  assert.ok(result.diff.length >= 1)
+  assert.equal(readFileSync(patchFile, 'utf8'), before, '对比不能改本机配置')
+  assert.deepEqual(remote.files, {}, '对比不能写入云端')
+  rmSync(root, { recursive: true })
+})
+
+test('没有 Git 时间能力时不把快照生成时间伪称上传时间', async () => {
+  const { root, dshRoot, skillsRoot, workDir } = sandbox()
+  const remote = fakeBackend({ 'snapshot.json': JSON.stringify({ schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', entries: [] }) })
+  const service = createSyncService({ backend: remote, workDir, dshRoot, skillsRoot })
+  const result = await service.compareWithRemote()
+  assert.equal(result.remoteUploadedAt, null)
+  assert.equal(result.remoteSnapshotGeneratedAt, '2026-01-01T00:00:00.000Z')
   rmSync(root, { recursive: true })
 })
 
@@ -1006,6 +1033,7 @@ test('自更新：装的是哪个提交读得出来，且能判断出「可以�
   const status = await service.describeUpdate({ remoteCommit: REMOTE_SHA })
   assert.equal(status.installedCommit, INSTALLED_SHA, '提交号只在锁文件的解析结果里')
   assert.equal(status.installedSpec, 'github:toookamak/dsh-settings-roam')
+  assert.match(status.pluginVersion, /^\d+\.\d+\.\d+$/, '版本号是给人分辨构建用的，必须是能排序的三段式')
   assert.equal(status.needsUpdate, true)
   assert.equal(status.reason, 'update-available')
   assert.equal(status.repoUrl, 'https://github.com/toookamak/dsh-settings-roam.git')

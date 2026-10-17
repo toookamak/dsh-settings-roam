@@ -114,6 +114,22 @@ const { root, work, repo, cleanup } = sandbox()
   cleanup()
 })
 
+test('lastUploadAt 返回备份快照最近一次提交时间', async () => {
+  const { work, repo, cleanup } = sandbox()
+  try {
+    const backend = createGitBackend({ repoUrl: repo, workDir: work })
+    await backend.ensureReady()
+    assert.equal(await backend.lastUploadAt(), null)
+    await backend.writeFile('snapshot.json', '{}\n')
+    await backend.push('写入快照')
+    const uploadedAt = await backend.lastUploadAt()
+    assert.ok(uploadedAt)
+    assert.ok(Number.isFinite(Date.parse(uploadedAt)))
+  } finally {
+    cleanup()
+  }
+})
+
 test('无改动时 push 不产生空提交', async () => {
   const { work, repo, cleanup } = sandbox()
   const backend = createGitBackend({ repoUrl: repo, workDir: work })

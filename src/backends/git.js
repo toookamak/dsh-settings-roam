@@ -197,6 +197,13 @@ export function createGitBackend(config) {
       writeFileSync(abs, content, 'utf8')
     },
 
+    /** 最近一次云端提交时间；空仓库返回 null。 */
+    async lastUploadAt() {
+      if (!isRepo()) return null
+      const value = git(workDir, ['log', '-1', '--format=%cI', '--', 'snapshot.json'], { allowFailure: true }).trim()
+      return value || null
+    },
+
     /** 供界面与错误信息使用，已脱敏。 */
     describe() {
       return branch === null ? `git 仓库 ${safeUrl}` : `git 仓库 ${safeUrl}（分支 ${branch}）`

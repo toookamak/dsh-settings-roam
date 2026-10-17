@@ -42,6 +42,7 @@ export const ROUTES = {
   pull: `${ROUTE_PREFIX}.pull`,
   edit: `${ROUTE_PREFIX}.edit`,
   update: `${ROUTE_PREFIX}.update`,
+  compare: `${ROUTE_PREFIX}.compare`,
 }
 
 /**
@@ -489,6 +490,11 @@ export function createRouteHandlers(deps) {
       // （packages/client/connection/src/rpc.ts:152）。直接回对象会让
       // Connection 层拿到一个它读不懂的东西。
       if (path === ROUTES.status) return jsonResponse(await status())
+      if (path === ROUTES.compare) {
+        if (request.method !== 'POST') return jsonResponse({ ok: false, error: '云端对比需要 POST' }, 405)
+        const result = await service.compareWithRemote()
+        return jsonResponse({ ok: true, ...result })
+      }
       if (path === ROUTES.export) {
         if (request.method !== 'POST') return jsonResponse({ ok: false, error: '导出需要 POST' }, 405)
         return await exportLocal(request)
@@ -539,5 +545,6 @@ export function describeRoutes(deps) {
     { path: ROUTES.pull, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
     { path: ROUTES.edit, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
     { path: ROUTES.update, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
+    { path: ROUTES.compare, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
   ]
 }

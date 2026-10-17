@@ -467,8 +467,8 @@ test('界面用宿主提供的组件，而不是裸 HTML 元素', async () => {
   assert.ok(isInput(findByClass(field, 'roam-field-input')), '输入框要用宿主的 Input')
   assert.equal(
     (findByClass(section, 'roam-actions').children ?? []).filter(isButton).length,
-    4,
-    '四个动作都要用宿主的 Button',
+    5,
+    '五个动作都要用宿主的 Button',
   )
 })
 
@@ -494,7 +494,7 @@ test('界面组件取不到时降级为可用元素，而不是整节崩掉', as
     actions: {},
   }))
   const buttons = (findByClass(section, 'roam-actions').children ?? []).filter(c => c?.type === 'button')
-  assert.equal(buttons.length, 4, '降级后仍要给出四个可点的按钮，只是没有宿主的样式')
+  assert.equal(buttons.length, 5, '降级后仍要给出五个可点的按钮，只是没有宿主的样式')
 })
 
 test('样式表按 id 幂等注入 —— 反复挂载不堆样式', () => {
@@ -939,15 +939,35 @@ test('动作区第一个是「导出到文件」，且每个按钮都真接上�
       onExport: () => clicked.push('export'),
       onImport: () => clicked.push('import'),
       onPull: () => clicked.push('pull'),
+      onCompare: () => clicked.push('compare'),
       onPush: () => clicked.push('push'),
     },
   }))
   const buttons = (findByClass(section, 'roam-actions').children ?? []).filter(isButton)
 
   assert.equal(buttons[0].children[0], '导出到文件', '第一次打开这一节最该点的是它')
-  assert.deepEqual(buttons.map(b => b.children[0]), ['导出到文件', '导入', '拉取', '推送'])
+  assert.deepEqual(buttons.map(b => b.children[0]), ['导出到文件', '导入', '拉取', '与云端对比', '推送'])
   for (const b of buttons) b.props.onClick()
-  assert.deepEqual(clicked, ['export', 'import', 'pull', 'push'])
+  assert.deepEqual(clicked, ['export', 'import', 'pull', 'compare', 'push'])
+})
+
+test('云端对比结果显示本地/云端时间与差异，零差异时明确说明一致', async () => {
+  const exported = await loadClient('comparison')
+  const changed = render(exported.Section({
+    state: { kind: 'clean', status: { configured: true }, comparison: {
+      localConfigModifiedAt: '2026-10-14T12:00:00.000Z',
+      remoteUploadedAt: '2026-10-13T12:00:00.000Z',
+      diff: [{ path: 'config/profile.patch.yml', action: 'modify', summary: '模型配置有变化' }],
+    } }, actions: {},
+  }))
+  const text = JSON.stringify(changed)
+  assert.match(text, /本地关注配置最后修改/)
+  assert.match(text, /云端最后上传/)
+  assert.match(text, /模型配置有变化/)
+  const same = render(exported.Section({
+    state: { kind: 'clean', status: { configured: true }, comparison: { localConfigModifiedAt: null, remoteUploadedAt: null, diff: [] } }, actions: {},
+  }))
+  assert.match(JSON.stringify(same), /云端与本机一致/)
 })
 
 // ─── 更新插件自己（用户要求「每次卸载重装太麻烦」）──────────────────
@@ -968,7 +988,7 @@ test('「插件自身」单独一行，不挤进同步按钮那排', async () =>
   }))
 
   const actions = findByClass(section, 'roam-actions')
-  assert.equal((actions.children ?? []).filter(isButton).length, 4, '同步动作仍然是四个')
+  assert.equal((actions.children ?? []).filter(isButton).length, 5, '同步动作包含四项同步操作和一个只读对比操作')
 
   const row = findByClass(section, 'roam-update')
   assert.ok(row, '要有「插件自身」这一行')
@@ -1007,6 +1027,13 @@ test('updateNote 只说已经知道的事，不猜「有没有新版本」', asy
   assert.match(
     exported.updateNote({ status: { update: { installedSpec: 'github:o/r', installedCommit: 'abcdef0123456789', reason: 'unchecked' } } }, t),
     /abcdef0/,
+  )
+  // 有版本号时，除了提交号还要给出能排序的版本名——否则两个构建只能逐位比对十六进制。
+  assert.match(
+    exported.updateNote({
+      status: { update: { installedSpec: 'github:o/r', installedCommit: 'abcdef0123456789', pluginVersion: '0.2.0', reason: 'unchecked' } },
+    }, t),
+    /v0\.2\.0 \(abcdef0\)/,
   )
   // 状态接口刻意不联网：远程提交是空的，但这是「还没问」而不是「问不到」
   assert.match(

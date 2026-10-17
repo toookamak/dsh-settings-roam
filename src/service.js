@@ -12,13 +12,13 @@
  * 只要 prepare 阶段有任何写副作用，「确认」这个动作就名存实亡了。
  */
 
-import { readFileSync, existsSync, readdirSync } from 'node:fs'
+import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { parsePatchList, renderPatches, splitByTopLevelId } from './yaml-loader.js'
 import { profilePatchPath, profileDir, listProfiles } from './home-paths.js'
 import { extractShared } from './extract.js'
-import { buildSnapshot, serializeSnapshot } from './snapshot.js'
+import { buildSnapshot, serializeSnapshot, parseSnapshot } from './snapshot.js'
 import { diffSnapshots, summarizeDiff } from './diff.js'
 import { applyPatchFile, verifyWriteBack } from './apply.js'
 import { scanSkills, listSkillNames, crossCheckSkills, applySkillFiles } from './skills.js'
@@ -61,6 +61,26 @@ export const CLOUD_PATHS = Object.freeze({
   bundles: 'config/bundles.json',
   notes: 'notes.md',
 })
+
+/**
+ * 本插件自己的版本号（自身 package.json 的 version）。
+ *
+ * 为什么提交号之外还要有它：提交号能唯一确定「装的是哪一次提交」，
+ * 但人眼比较两个构建时，需要的是能排序的名字（0.2.0 与 0.1.0）。
+ * 只补提交号会让人只能逐位比对一串十六进制。
+ *
+ * 读失败就返回 null：版本号只是给人看的辅助信息，
+ * 不该因为它读不到就让整条自更新状态失败。
+ */
+const OWN_VERSION = (() => {
+  try {
+    const doc = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+    const version = doc?.version
+    return typeof version === 'string' && version.trim() !== '' ? version.trim() : null
+  } catch {
+    return null
+  }
+})()
 
 function hashOf(content) {
   return createHash('sha256').update(content).digest('hex').slice(0, 16)
@@ -444,6 +464,8 @@ export function createSyncService(config) {
     const empty = {
       installedSpec: null,
       installedCommit: null,
+      // 本插件自己的版本号：不管装成了哪种形态都读得出来，所以每一支都带上它。
+      pluginVersion: OWN_VERSION,
       remoteCommit: null,
       repoUrl: null,
       needsUpdate: false,
@@ -488,6 +510,7 @@ export function createSyncService(config) {
         // planUpdate 把它叫 spec；对外统一叫 installedSpec，
         // 免得调用方要在两个名字之间猜哪个是「装的那一条」。
         installedSpec: plan.spec,
+        pluginVersion: OWN_VERSION,
         canInstall: typeof manager?.installBundle === 'function',
         error: null,
       }
@@ -686,6 +709,7 @@ async function crossCheck() {
      */
     async prepareInspect() {
       const patchExists = existsSync(patchFile())
+      const localConfigModifiedAt = patchExists ? statSync(patchFile()).mtime.toISOString() : null
       const rows = readLocalRows()
       const { shared, machine, excluded } = splitByTopLevelId(rows)
       const skills = scanSkills(skillsRoot)
@@ -714,6 +738,7 @@ async function crossCheck() {
       return {
         patchFile: patchFile(),
         patchExists,
+        localConfigModifiedAt,
         total: rows.length,
         shared,
         machine,
@@ -725,6 +750,47 @@ async function crossCheck() {
         providers: { count: providerNames.length, names: providerNames },
         skillNames,
         bundles,
+      }
+    },
+
+    /**
+     * 只读地比较本机可移植配置与云端快照。
+     * 返回的本地时间是 cordis.patch.yml 的 mtime（文件级时间，不代表每个字段的独立修改时间）。
+     */
+    async compareWithRemote() {
+      const backend = requireBackend()
+      await backend.ensureReady()
+      await backend.pull()
+      const rows = readLocalRows()
+      const localConfigModifiedAt = existsSync(patchFile())
+        ? statSync(patchFile()).mtime.toISOString()
+        : null
+      const { patch } = extractShared({ patchRows: rows })
+      const files = [
+        { path: CLOUD_PATHS.patch, content: renderPatches(patch, 'settings-roam') },
+        ...Object.entries(collectSkillFiles()).map(([path, entry]) => ({
+          path,
+          content: entry.content,
+          executable: entry.executable,
+        })),
+      ]
+      const localSnapshot = buildSnapshot({
+        generatedBy: 'settings-roam-compare',
+        generatedAt: new Date().toISOString(),
+        files,
+      })
+      const remoteText = await backend.readFile(CLOUD_PATHS.snapshot)
+      const remoteSnapshot = remoteText ? parseSnapshot(remoteText) : { entries: [], generatedAt: null }
+      const diff = diffSnapshots(remoteSnapshot, localSnapshot)
+      return {
+        diff,
+        summary: summarizeDiff(diff),
+        comparedWithRemote: true,
+        localConfigModifiedAt,
+        remoteUploadedAt: typeof backend.lastUploadAt === 'function'
+          ? await backend.lastUploadAt()
+          : null,
+        remoteSnapshotGeneratedAt: remoteSnapshot.generatedAt ?? null,
       }
     },
 
