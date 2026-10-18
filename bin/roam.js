@@ -20,8 +20,9 @@
  * 退出码：0 成功，1 失败，2 用法错误。
  */
 
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { resolveDshHome } from '../src/home-paths.js'
 import { createSyncService } from '../src/service.js'
 import { createGitBackend } from '../src/backends/git.js'
@@ -534,7 +535,24 @@ async function main(argv) {
 }
 
 // 仅在直接执行时跑 main；被测试 import 时不自动执行。
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop())) {
+//
+// 判定必须走 pathToFileURL，不能用「取末段比字符串后缀」：Windows 的
+// argv[1] 是 `E:\...\bin\roam.js`（反斜杠），而 import.meta.url 是
+// `file:///E:/.../bin/roam.js`，按 '/' 切分取末段得到整条路径，永远不相等。
+// 实测后果是 CLI 在 Windows 上静默什么都不做、退出码仍是 0——
+// 15 个「真跑 CLI」用例因此全红，而单看代码完全看不出问题。
+function isDirectRun() {
+  const entry = process.argv[1]
+  if (!entry) return false
+  try {
+    // 走 realpath：npm 的 bin 垫片在 POSIX 上是符号链接，不解析会误判。
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href
+  } catch {
+    return import.meta.url === pathToFileURL(entry).href
+  }
+}
+
+if (isDirectRun()) {
   main(process.argv.slice(2)).then(
     code => { process.exitCode = code },
     error => {
