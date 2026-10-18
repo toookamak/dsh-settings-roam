@@ -1,7 +1,7 @@
 {
   "name": "@toookamak/dsh-settings-roam",
   "description": "设置漫游：把 DSH 的可移植配置推送到云端，在新机器上拉取并应用",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "main": "index.js",
   "bin": {
@@ -41,11 +41,11 @@
     "test": "node --test"
   },
   "dependencies": {
-    "@deepseek-ai/cordis-plugin-include": "^1.0.10-alpha.2",
     "js-yaml": "^4.3.2"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/cordis-plugin-include": "^1.0.10-alpha.1",
     "react": "^18.3.1",
     "@deepseek-ai/schemastery": "^3.18.1"
   },
@@ -54,6 +54,7 @@
   },
   "license": "MIT",
   "devDependencies": {
+    "@deepseek-ai/cordis-plugin-include": "^1.0.10-alpha.1",
     "@deepseek-ai/dsh-app-boot": "^0.2.1-alpha.2",
     "@deepseek-ai/schemastery": "^3.18.5-alpha.2"
   },
@@ -62,6 +63,9 @@
       "optional": true
     },
     "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/cordis-plugin-include": {
       "optional": true
     },
     "react": {
