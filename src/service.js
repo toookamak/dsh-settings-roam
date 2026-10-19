@@ -17,12 +17,12 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { parsePatchList, renderPatches, splitByTopLevelId } from './yaml-loader.js'
 import { profilePatchPath, profileDir, listProfiles } from './home-paths.js'
-import { extractShared } from './extract.js'
 import { buildSnapshot, serializeSnapshot, parseSnapshot } from './snapshot.js'
 import { diffSnapshots, summarizeDiff } from './diff.js'
 import { applyPatchFile, verifyWriteBack } from './apply.js'
 import { scanSkills, listSkillNames, crossCheckSkills, applySkillFiles } from './skills.js'
 import { collectBundles } from './bundles.js'
+import { MACHINE_PATCH_IDS } from './ownership.js'
 import {
   checkPatchEntries,
   checkPlugins,
@@ -142,6 +142,26 @@ function patchFieldTransfers(localRows, remoteRows, direction) {
   return items
 }
 
+/** 推送时用本机勾选项替换云端同 ID 配置，同时保留未勾选及本机缺少的云端项。 */
+function mergeSelectedPatchRows(localRows, remoteRows, selectedIds) {
+  const localById = new Map(localRows.map(row => [row.id, row]))
+  const seen = new Set()
+  const merged = []
+  for (const remote of remoteRows) {
+    if (selectedIds.has(remote.id) && localById.has(remote.id)) {
+      merged.push(localById.get(remote.id))
+      seen.add(remote.id)
+    } else {
+      merged.push(remote)
+      if (localById.has(remote.id)) seen.add(remote.id)
+    }
+  }
+  for (const local of localRows) {
+    if (!seen.has(local.id)) merged.push(local)
+  }
+  return merged
+}
+
 /**
  * 从 patch 文本里收集 provider 的 apiKeyEnv 引用名。
  *
@@ -241,6 +261,27 @@ export function createSyncService(config) {
   const explicitProfile = () => readOption('profileName')
   const configuredExportRoot = () => readOption('exportRoot')
   const configuredImportRoot = () => readOption('importRoot')
+
+  /** 配置项名单是显式允许列表；无效配置按空名单处理，避免意外扩大同步范围。 */
+  function selectedPluginIds(optionName) {
+    const raw = readOption(optionName)
+    if (raw === null) return new Set(['llm-pi-ai'])
+    try {
+      const parsed = JSON.parse(raw)
+      if (!Array.isArray(parsed)) return new Set()
+      return new Set(parsed.filter(id => typeof id === 'string' && id.trim() !== ''))
+    } catch {
+      return new Set()
+    }
+  }
+
+  /** 机器专属项和插入指令永不进入插件选择同步。 */
+  function selectablePluginRows(rows) {
+    const machineIds = new Set(MACHINE_PATCH_IDS)
+    return (rows ?? []).filter(row => typeof row?.id === 'string'
+      && row.insert === undefined
+      && !machineIds.has(row.id))
+  }
 
   /**
    * 默认导入目录。
@@ -801,11 +842,32 @@ async function crossCheck() {
         // 既不共享也不属于本机的项不计入同步，但要让用户看见它们被排除了，
         // 否则「我配的东西怎么没过去」会变成一个无从查证的问题。
         excludedIds: excluded.map(row => row.id).filter(Boolean),
+        syncablePatchIds: selectablePluginRows(rows).map(row => row.id).sort(),
         skills,
         skillCheck,
         providers: { count: providerNames.length, names: providerNames },
         skillNames,
         bundles,
+      }
+    },
+
+    /** 上传列表来自本机；下载列表同时包含云端条目，便于新机器选择尚未配置的插件。 */
+    async pluginSelectionOptions() {
+      const localIds = selectablePluginRows(readLocalRows()).map(row => row.id)
+      let remoteIds = []
+      const backend = tryBackend()
+      if (backend !== null) {
+        await backend.ensureReady()
+        await backend.pull()
+        const verified = await readVerifiedSnapshot(backend)
+        const patchText = verified.files.get(CLOUD_PATHS.patch) ?? null
+        if (patchText !== null) {
+          remoteIds = selectablePluginRows(parsePatchList(patchText)).map(row => row.id)
+        }
+      }
+      return {
+        uploadPluginIds: [...new Set(localIds)].sort(),
+        downloadPluginIds: [...new Set([...localIds, ...remoteIds])].sort(),
       }
     },
 
@@ -827,7 +889,8 @@ async function crossCheck() {
       const localConfigModifiedAt = existsSync(patchFile())
         ? statSync(patchFile()).mtime.toISOString()
         : null
-      const { patch } = extractShared({ patchRows: rows })
+      const uploadIds = selectedPluginIds('uploadPluginIds')
+      const patch = selectablePluginRows(rows).filter(row => uploadIds.has(row.id))
       const files = [
         { path: CLOUD_PATHS.patch, content: renderPatches(patch, 'settings-roam') },
         ...Object.entries(collectSkillFiles()).map(([path, entry]) => ({
@@ -836,12 +899,18 @@ async function crossCheck() {
           executable: entry.executable,
         })),
       ]
+      const verified = await readVerifiedSnapshot(backend)
+      const remotePatchText = verified.files.get(CLOUD_PATHS.patch) ?? null
+      const remotePatchRows = remotePatchText === null ? [] : parsePatchList(remotePatchText)
+      files[0].content = renderPatches(
+        mergeSelectedPatchRows(patch, selectablePluginRows(remotePatchRows), uploadIds),
+        'settings-roam',
+      )
       const localSnapshot = buildSnapshot({
         generatedBy: 'settings-roam-compare',
         generatedAt: new Date().toISOString(),
         files,
       })
-      const verified = await readVerifiedSnapshot(backend)
       const remoteSnapshot = verified.snapshot ?? { entries: [], generatedAt: null }
       const diff = diffSnapshots(remoteSnapshot, localSnapshot)
       return {
@@ -869,7 +938,8 @@ async function crossCheck() {
       // 而「不联网也能把配置取出来」正是第一阶段的目标。
       const backend = tryBackend()
       const rows = readLocalRows()
-      const { patch } = extractShared({ patchRows: rows })
+      const uploadIds = selectedPluginIds('uploadPluginIds')
+      const patch = selectablePluginRows(rows).filter(row => uploadIds.has(row.id))
 
       const patchContent = renderPatches(patch, 'settings-roam')
       const files = [
@@ -912,6 +982,12 @@ async function crossCheck() {
         remoteFiles = verified.files
         remoteRevision = verified.text === null ? null : hashOf(verified.text)
         comparedWithRemote = true
+        const remotePatchText = remoteFiles.get(CLOUD_PATHS.patch) ?? null
+        const remotePatchRows = remotePatchText === null ? [] : parsePatchList(remotePatchText)
+        files[0].content = renderPatches(
+          mergeSelectedPatchRows(patch, selectablePluginRows(remotePatchRows), uploadIds),
+          'settings-roam',
+        )
       }
 
       const localSnapshot = buildSnapshot({
@@ -1014,9 +1090,11 @@ async function crossCheck() {
       const snapshot = verified.snapshot
       const verifiedFiles = verified.files
       const patchText = verifiedFiles.get(CLOUD_PATHS.patch) ?? null
-      const remoteRows = patchText === null ? [] : parsePatchList(patchText)
+      const remoteRowsRaw = patchText === null ? [] : parsePatchList(patchText)
+      const downloadIds = selectedPluginIds('downloadPluginIds')
+      const remoteRows = selectablePluginRows(remoteRowsRaw).filter(row => downloadIds.has(row.id))
 
-      const localRows = readLocalRows()
+      const localRows = selectablePluginRows(readLocalRows()).filter(row => downloadIds.has(row.id))
       const localEntries = localRows.map(row => ({
         path: `patch:${row.id}`,
         kind: 'shared',

@@ -67,13 +67,22 @@ export const Config = z.object({
     '备份放在仓库的哪条分支。一个仓库可以放多个插件的备份，各占一条分支；留空用 settings-roam。',
   ).volatile(),
   webdavUrl: z.string().default('').description(
-    'WebDAV 目标目录地址。仅使用 HTTPS，建议为设置漫游单独建一个空目录。',
+    'WebDAV 上级目录地址。仅使用 HTTPS；插件会在此目录下使用单独的同步目录。',
+  ).volatile(),
+  webdavFolder: z.string().default('dsh-settings').description(
+    'WebDAV 保存目录名。默认 dsh-settings；目录会在 WebDAV 地址对应的上级目录下自动创建。',
   ).volatile(),
   webdavUsername: z.string().default('').description(
     'WebDAV 账号；可留空用于匿名访问。账号与密码只保存在本机 profile 配置，不会同步到云端。',
   ).volatile(),
   webdavPassword: z.string().default('').description(
     'WebDAV 密码；仅保存在本机 profile 配置并发送给 WebDAV 服务器，不会写入同步文件。',
+  ).volatile(),
+  uploadPluginIds: z.string().default('["llm-pi-ai"]').description(
+    '允许推送的插件配置 ID 列表（JSON 数组）；设置页中可勾选。默认仅包含已确认可移植的 llm-pi-ai。',
+  ).volatile(),
+  downloadPluginIds: z.string().default('["llm-pi-ai"]').description(
+    '允许拉取并覆盖的插件配置 ID 列表（JSON 数组）；设置页中可勾选。默认仅包含已确认可移植的 llm-pi-ai。',
   ).volatile(),
 })
 
@@ -177,6 +186,7 @@ export function apply(ctx, config) {
         if (url === null) throw new Error('还没配置 WebDAV 地址。请在「WebDAV 地址」中填写服务器提供的完整地址。')
         return createWebDavBackend({
           url,
+          folder: readOption('webdavFolder') ?? 'dsh-settings',
           username: readOption('webdavUsername') ?? '',
           password: readOption('webdavPassword') ?? '',
         })

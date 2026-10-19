@@ -7,14 +7,18 @@ function safeMessage(text, url) {
     .replaceAll(url, '[WebDAV 地址]')
 }
 
-function normalizeBase(value) {
+function normalizeBase(value, folder) {
   let url
   try { url = new URL(value) } catch { throw new Error('WebDAV 地址无效，请填写完整的 https:// 地址。') }
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) {
     throw new Error('WebDAV 地址须为不含账号密码、查询参数或片段的 HTTPS 地址。')
   }
   url.pathname = `${url.pathname.replace(/\/+$/, '')}/`
-  return url
+  const folderName = String(folder ?? 'dsh-settings').trim()
+  if (!folderName || folderName === '.' || folderName === '..' || /[\\/\u0000-\u001f]/.test(folderName)) {
+    throw new Error('WebDAV 保存目录名无效；请填写单个目录名，不要包含斜杠。')
+  }
+  return new URL(`${encodeURIComponent(folderName)}/`, url)
 }
 
 function encodePath(path) {
@@ -25,9 +29,9 @@ function encodePath(path) {
   return parts.map(encodeURIComponent).join('/')
 }
 
-/** @param {{url:string, username?:string, password?:string, fetch?:Function}} config */
+/** @param {{url:string, folder?:string, username?:string, password?:string, fetch?:Function}} config */
 export function createWebDavBackend(config) {
-  const base = normalizeBase(config.url)
+  const base = normalizeBase(config.url, config.folder)
   const baseText = base.toString()
   const fetcher = config.fetch ?? globalThis.fetch
   const authorization = config.username || config.password

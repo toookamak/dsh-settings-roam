@@ -114,7 +114,11 @@ window.__ModuleLoader__.load({
           },
           webdavUrl: {
             label: 'WebDAV 地址',
-            hint: '填写服务器提供的完整 HTTPS 地址。WebDAV 会原位覆盖文件，历史版本取决于服务器设置。',
+            hint: '填写服务器提供的完整 HTTPS 上级目录地址；同步内容会放进下方指定的目录。',
+          },
+          webdavFolder: {
+            label: 'WebDAV 保存目录名',
+            hint: '默认 dsh-settings，会在 WebDAV 地址对应目录下自动创建；只填写一个目录名。',
           },
           webdavUsername: {
             label: 'WebDAV 用户名',
@@ -123,6 +127,16 @@ window.__ModuleLoader__.load({
           webdavPassword: {
             label: 'WebDAV 密码',
             hint: '以明文保存在本机 profile 配置，并通过 HTTPS 连接服务器；不会进入同步文件或上传到云端。',
+          },
+          uploadPluginIds: {
+            label: '勾选要上传的插件配置',
+            hint: '默认只选已确认可移植的 llm-pi-ai。勾选后会上传该插件的完整配置；其他插件配置留在本机。',
+            empty: '本机没有可选的插件配置条目。',
+          },
+          downloadPluginIds: {
+            label: '勾选要下载并覆盖的插件配置',
+            hint: '只应用勾选的云端插件配置，确认前会显示具体改动并自动备份本机文件。不会安装插件。',
+            empty: '本机没有可选的插件配置条目。',
           },
           branch: {
             label: '备份放在哪条分支',
@@ -270,9 +284,12 @@ window.__ModuleLoader__.load({
             hint: 'Remote Git repository used when git is selected.',
           },
           backendKind: { label: 'Cloud storage', hint: 'Choose a storage method.', git: 'Git', webdav: 'WebDAV' },
-          webdavUrl: { label: 'WebDAV URL', hint: 'Enter the full HTTPS URL from your server. Files are overwritten in place; version history depends on the server.' },
+          webdavUrl: { label: 'WebDAV URL', hint: 'Enter the full HTTPS parent directory URL from your server. Sync data is stored in the folder below.' },
+          webdavFolder: { label: 'WebDAV folder name', hint: 'Defaults to dsh-settings and is created under the WebDAV URL. Enter one folder name.' },
           webdavUsername: { label: 'WebDAV username', hint: 'Leave blank for anonymous access. Stored in this machine\'s profile config.' },
           webdavPassword: { label: 'WebDAV password', hint: 'Stored as plain text in this machine\'s profile config and sent over HTTPS; never included in sync files or uploaded.' },
+          uploadPluginIds: { label: 'Plugin settings to upload', hint: 'Only llm-pi-ai is selected by default. Selecting a plugin uploads its full configuration; other plugin settings stay local.', empty: 'There are no selectable plugin settings on this machine.' },
+          downloadPluginIds: { label: 'Plugin settings to download and overwrite', hint: 'Only selected cloud settings are applied. The preview lists changes and the local file is backed up first. Plugins are not installed.', empty: 'There are no selectable plugin settings on this machine.' },
           branch: {
             label: 'Branch for the backup',
             hint: 'One repository can hold backups from several plugins, each on its own branch. Empty uses settings-roam.',
@@ -551,7 +568,7 @@ window.__ModuleLoader__.load({
     let hostContext = null
 
     /** 我们自己声明的配置字段，用来在设置目录里认出本插件的那一条。 */
-    const FIELD_KEYS = ['backendKind', 'repoUrl', 'branch', 'webdavUrl', 'webdavUsername', 'webdavPassword', 'profileName', 'exportRoot', 'importRoot']
+    const FIELD_KEYS = ['backendKind', 'repoUrl', 'branch', 'webdavUrl', 'webdavFolder', 'webdavUsername', 'webdavPassword', 'uploadPluginIds', 'downloadPluginIds', 'profileName', 'exportRoot', 'importRoot']
 
     /** 表单里要画出来的字段，顺序即界面顺序。 */
     const FIELDS = [
@@ -559,8 +576,11 @@ window.__ModuleLoader__.load({
       { key: 'repoUrl', copy: 'repoUrl' },
       { key: 'branch', copy: 'branch' },
       { key: 'webdavUrl', copy: 'webdavUrl' },
+      { key: 'webdavFolder', copy: 'webdavFolder' },
       { key: 'webdavUsername', copy: 'webdavUsername' },
       { key: 'webdavPassword', copy: 'webdavPassword', type: 'password' },
+      { key: 'uploadPluginIds', copy: 'uploadPluginIds', type: 'plugin-selection', defaultValue: '["llm-pi-ai"]' },
+      { key: 'downloadPluginIds', copy: 'downloadPluginIds', type: 'plugin-selection', defaultValue: '["llm-pi-ai"]' },
       { key: 'profileName', copy: 'profileName' },
       { key: 'exportRoot', copy: 'exportRoot' },
       { key: 'importRoot', copy: 'importRoot' },
@@ -607,6 +627,8 @@ window.__ModuleLoader__.load({
       '.roam-pick{display:flex;flex-direction:column;gap:6px}',
       '.roam-pick-title{margin:0;font-size:13px;line-height:20px;font-weight:500;color:var(--dsw-alias-label-secondary)}',
       '.roam-pick-options{display:flex;flex-wrap:wrap;gap:8px}',
+      '.roam-checks{display:flex;flex-direction:column;gap:8px}',
+      '.roam-check{display:flex;align-items:center;gap:8px;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary)}',
       '.roam-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
       '.roam-pending-text{margin:0;font-size:13px;line-height:20px}',
       '.roam-transfer-list{display:flex;flex-direction:column;gap:6px;max-height:260px;overflow:auto;font-size:12px;line-height:18px}',
@@ -771,10 +793,36 @@ window.__ModuleLoader__.load({
      * 敲错的那道防线。importRoot 还要在标签上就写清尚未生效，
      * 免得用户填完等不到结果。
      */
-    function Field({ field, value, disabled, t, onChange, onCommit }) {
+    function Field({ field, value, disabled, t, onChange, onCommit, pluginIds = [] }) {
       const copy = `config.${field.copy}`
-      const control = field.options
-        ? h('div', { className: 'roam-actions' }, field.options.map(option => h(
+      let control
+      if (field.type === 'plugin-selection') {
+        let selected = []
+        try {
+          const parsed = JSON.parse(value || field.defaultValue || '[]')
+          if (Array.isArray(parsed)) selected = parsed.filter(id => typeof id === 'string')
+        } catch {}
+        control = pluginIds.length === 0
+          ? h('p', { className: 'roam-field-hint' }, t(`${copy}.empty`))
+          : h('div', { className: 'roam-checks' }, pluginIds.map(id => h(
+            'label', { className: 'roam-check', key: id },
+            h('input', {
+              type: 'checkbox',
+              checked: selected.includes(id),
+              disabled,
+              onChange: event => {
+                const next = event.target.checked
+                  ? [...new Set([...selected, id])]
+                  : selected.filter(item => item !== id)
+                const serialized = JSON.stringify(next)
+                onChange(field.key, serialized)
+                onCommit(field.key, serialized)
+              },
+            }),
+            h('span', null, id),
+          )))
+      } else if (field.options) {
+        control = h('div', { className: 'roam-actions' }, field.options.map(option => h(
           Button,
           {
             key: option,
@@ -788,7 +836,8 @@ window.__ModuleLoader__.load({
           },
           t(`${copy}.${option}`),
         )))
-        : h(Input, {
+      } else {
+        control = h(Input, {
           id: `roam-${field.key}`,
           className: 'roam-field-input',
           value,
@@ -804,6 +853,7 @@ window.__ModuleLoader__.load({
             if (event.key === 'Enter') event.currentTarget.blur()
           },
         })
+      }
       return h(
         'div',
         { className: 'roam-field' },
@@ -904,19 +954,37 @@ window.__ModuleLoader__.load({
       return snapshot?.status === 'ready' ? null : t('config.loading')
     }
 
-    function ConfigCard({ form, t, onSaved }) {
+    function ConfigCard({ form, t, onSaved, status }) {
       const snapshot = useFormSnapshot(form)
       const [drafts, setDrafts] = React.useState({})
       const [note, setNote] = React.useState(null)
+      const [pluginOptions, setPluginOptions] = React.useState({
+        uploadPluginIds: status?.syncablePatchIds ?? [],
+        downloadPluginIds: status?.syncablePatchIds ?? [],
+      })
 
       const values = snapshot?.value ?? {}
+
+      React.useEffect(() => {
+        let active = true
+        if (!status?.configured) return () => { active = false }
+        request('/api/settings-roam.selection')
+          .then(result => {
+            if (active) setPluginOptions({
+              uploadPluginIds: result.uploadPluginIds ?? status?.syncablePatchIds ?? [],
+              downloadPluginIds: result.downloadPluginIds ?? status?.syncablePatchIds ?? [],
+            })
+          })
+          .catch(() => {})
+        return () => { active = false }
+      }, [status?.configured, status?.syncablePatchIds?.join('|'), values.backendKind, values.repoUrl, values.branch, values.webdavUrl, values.webdavFolder])
 
       /** 草稿优先，其次才是已保存的值。 */
       const shown = key => (drafts[key] !== undefined ? drafts[key] : (values[key] ?? ''))
       const backendKind = String(shown('backendKind') || 'git').trim().toLowerCase()
       const visibleFields = FIELDS.filter(field => {
         if (['repoUrl', 'branch'].includes(field.key)) return backendKind === 'git'
-        if (['webdavUrl', 'webdavUsername', 'webdavPassword'].includes(field.key)) return backendKind === 'webdav'
+        if (['webdavUrl', 'webdavFolder', 'webdavUsername', 'webdavPassword'].includes(field.key)) return backendKind === 'webdav'
         return true
       })
 
@@ -975,9 +1043,10 @@ window.__ModuleLoader__.load({
           visibleFields.map(field => h(Field, {
           key: field.key,
           field,
-          value: shown(field.key),
+          value: shown(field.key) || field.defaultValue || '',
           disabled: snapshot?.writable === false,
           t,
+          pluginIds: pluginOptions[field.key] ?? status?.syncablePatchIds ?? [],
           onChange: (key, value) => setDrafts(current => ({ ...current, [key]: value })),
           onCommit: commit,
         })),
@@ -1392,7 +1461,7 @@ window.__ModuleLoader__.load({
         h(PreviewBlock, { state, actions, t, form: state?.form }),
         h(ActionBlock, { state, actions, t }),
         h(ComparisonBlock, { result: state?.comparison, t }),
-        state?.form ? h(ConfigCard, { form: state.form, t, onSaved: actions?.onSaved }) : null,
+        state?.form ? h(ConfigCard, { form: state.form, t, onSaved: actions?.onSaved, status: state?.status }) : null,
         h(EditCard, { entry: state?.editable, t, onEdit: actions?.onEdit }),
       )
     }

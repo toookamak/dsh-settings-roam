@@ -36,6 +36,7 @@ export const ROUTE_PREFIX = '/api/settings-roam'
  */
 export const ROUTES = {
   status: `${ROUTE_PREFIX}.status`,
+  selection: `${ROUTE_PREFIX}.selection`,
   export: `${ROUTE_PREFIX}.export`,
   import: `${ROUTE_PREFIX}.import`,
   push: `${ROUTE_PREFIX}.push`,
@@ -202,6 +203,7 @@ export function createRouteHandlers(deps) {
       excludedCount: inspected?.excludedIds?.length ?? 0,
       skillCount: inspected?.skills?.length ?? 0,
       skillCheck: inspected?.skillCheck ?? null,
+      syncablePatchIds: inspected?.syncablePatchIds ?? [],
       // 可编辑的公共条目。列表为空时界面不渲染编辑区，
       // 而不是给一个点不动的空壳。读不到（例如还没选 profile）时给空列表：
       // 它只是个可选的便利功能，不该把整节状态一起带崩。
@@ -212,6 +214,11 @@ export function createRouteHandlers(deps) {
       update: await service.describeUpdate({ remoteCommit: null }),
     }
   }
+
+  const selection = async () => ({
+    ok: true,
+    ...(await service.pluginSelectionOptions()),
+  })
 
   /**
    * 本地导出：把「要备份的东西」真实落成文件，不碰云端。
@@ -495,6 +502,10 @@ export function createRouteHandlers(deps) {
       // （packages/client/connection/src/rpc.ts:152）。直接回对象会让
       // Connection 层拿到一个它读不懂的东西。
       if (path === ROUTES.status) return jsonResponse(await status())
+      if (path === ROUTES.selection) {
+        if (request.method !== 'GET') return jsonResponse({ ok: false, error: '插件选择列表需要 GET' }, 405)
+        return jsonResponse(await selection())
+      }
       if (path === ROUTES.compare) {
         if (request.method !== 'POST') return jsonResponse({ ok: false, error: '云端对比需要 POST' }, 405)
         const result = await service.compareWithRemote()
@@ -531,7 +542,7 @@ export function createRouteHandlers(deps) {
     }
   }
 
-  return { fetch, status, exportLocal, importFrom, push, pull, edit, update }
+  return { fetch, status, selection, exportLocal, importFrom, push, pull, edit, update }
 }
 
 /**
@@ -544,6 +555,7 @@ export function describeRoutes(deps) {
   const handlers = createRouteHandlers(deps)
   return [
     { path: ROUTES.status, methods: ['GET'], requestBody: 'buffered', fetch: handlers.fetch },
+    { path: ROUTES.selection, methods: ['GET'], requestBody: 'buffered', fetch: handlers.fetch },
     { path: ROUTES.export, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
     { path: ROUTES.import, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
     { path: ROUTES.push, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
