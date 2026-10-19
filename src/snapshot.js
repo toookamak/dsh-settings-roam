@@ -8,8 +8,13 @@ import { createHash } from 'node:crypto'
 /** 快照格式版本。云端是跨机器共享的，读不懂的版本必须明确拒绝而不是猜。 */
 export const SCHEMA_VERSION = 1
 
-function hashOf(content) {
-  return createHash('sha256').update(content).digest('hex').slice(0, 16)
+/**
+ * 文本文件按 LF 计算摘要，避免 Git 在 Windows 检出时的 CRLF 转换造成误报。
+ * Buffer 表示二进制文件，必须按原始字节计算，不能做换行归一化。
+ */
+export function hashSnapshotContent(content) {
+  const normalized = typeof content === 'string' ? content.replace(/\r\n?/g, '\n') : content
+  return createHash('sha256').update(normalized).digest('hex').slice(0, 16)
 }
 
 /**
@@ -25,7 +30,7 @@ export function buildSnapshot(input) {
     entries: input.files.map(f => ({
       path: f.path,
       kind: f.kind,
-      hash: hashOf(f.content),
+      hash: hashSnapshotContent(f.content),
       ...(f.executable === true ? { executable: true } : {}),
     })),
   }
