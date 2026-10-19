@@ -367,31 +367,20 @@ export function createSyncService(config) {
    */
   const pluginManagerSource = config.pluginManager ?? null
 
-  /** 已建好的后端实例，惰性缓存，避免重复建。 */
-  let resolved = null
-
   /**
-   * 取后端实例。未配置时抛出可据以行动的说明。
+   * 按当前设置取得后端实例。设置页会原地更新 config，不能缓存实例，
+   * 否则切换 Git / WebDAV 后仍会继续访问首次创建的后端。
    * @returns {object}
    */
   function requireBackend() {
-    if (resolved !== null) return resolved
     const source = config.backend
-    if (typeof source === 'function') {
-      if (backendFactoryBroken !== null) throw backendFactoryBroken
-      resolved = source()
-    } else {
-      resolved = source ?? null
-    }
-    if (resolved === null) {
+    const backend = typeof source === 'function' ? source() : source ?? null
+    if (backend === null) {
       throw new Error('还没配置云端仓库。先在插件设置里填上仓库地址。')
     }
-    assertBackend(resolved)
-    return resolved
+    assertBackend(backend)
+    return backend
   }
-
-  /** 工厂自身抛错时记住它，避免每次调用都重跑一遍失败逻辑。 */
-  let backendFactoryBroken = null
 
   /**
    * 尝试取后端；取不到或装配失败时返回 null，不抛错。
