@@ -365,6 +365,7 @@ export function createRouteHandlers(deps) {
         to: plan.to,
         nextSpec: plan.nextSpec,
         needsUpdate: plan.needsUpdate,
+        canInstall: plan.canInstall === true,
         noop: plan.noop,
         reason: plan.reason,
       })

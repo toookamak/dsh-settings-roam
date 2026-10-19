@@ -240,10 +240,11 @@ window.__ModuleLoader__.load({
         update: {
           title: '插件自身',
           installed: '当前版本 {label}',
+          autoUnavailable: '当前环境没有自动安装能力，无法从这里更新。',
           unknown: '认不出当前版本：依赖清单里没有记下提交号。',
           noSpec: '这个 profile 的依赖清单里没有本插件，认不出它是怎么装进来的。',
           notGit: '这一份是本地链接安装的，改完代码重启 DSH 即可，不用在这里更新。',
-          check: '检查更新',
+          check: '检查并更新',
           available: '有新版本：{from} → {to}',
           availableUnknown: '有新版本：{to}（当前这一版认不出来）',
         },
@@ -392,10 +393,11 @@ window.__ModuleLoader__.load({
         update: {
           title: 'This plugin',
           installed: 'Installed {label}',
+          autoUnavailable: 'Automatic installation is unavailable in this environment.',
           unknown: 'The installed commit is unknown: the profile manifest records no commit for it.',
           noSpec: 'This profile does not list the plugin as a dependency, so the installed version cannot be told.',
           notGit: 'This copy is a local link install. Edit the code and restart DSH instead.',
-          check: 'Check for updates',
+          check: 'Check and update',
           available: 'Newer version available: {from} → {to}',
           availableUnknown: 'Newer version available: {to} (the installed one cannot be identified)',
         },
@@ -539,7 +541,8 @@ window.__ModuleLoader__.load({
       if (info.reason === 'no-spec') return t('update.noSpec')
       if (info.reason === 'not-git') return t('update.notGit')
       if (typeof info.installedCommit !== 'string' || info.installedCommit === '') {
-        return t('update.unknown')
+        const unknown = t('update.unknown')
+        return info.canInstall === true ? unknown : `${unknown} ${t('update.autoUnavailable')}`
       }
       const short = info.installedCommit.slice(0, 7)
       // 主机半侧读不出自身版本号时只报提交号，而不是编一个版本号：
@@ -547,7 +550,8 @@ window.__ModuleLoader__.load({
       const label = typeof info.pluginVersion === 'string' && info.pluginVersion !== ''
         ? `v${info.pluginVersion} (${short})`
         : short
-      return t('update.installed', { label })
+      const installed = t('update.installed', { label })
+      return info.canInstall === true ? installed : `${installed} ${t('update.autoUnavailable')}`
     }
 
     function normalizeRefused(items) {
@@ -1399,7 +1403,7 @@ window.__ModuleLoader__.load({
             h('p', { className: 'roam-update-note' }, note),
             h(
               Button,
-              { variant: 'ghost', size: 'sm', disabled, onClick: () => actions?.onUpdate?.() },
+              { variant: 'ghost', size: 'sm', disabled: disabled || state?.status?.update?.canInstall !== true, onClick: () => actions?.onUpdate?.() },
               t('update.check'),
             ),
           ),
@@ -1729,8 +1733,8 @@ window.__ModuleLoader__.load({
        * 而且改完必须重启 DSH 才生效。所以确认文案里把这一点明写出来——
        * 否则用户更新完看到界面一点没变，只会以为更新没成功，然后再点一次。
        *
-       * 检查这步要联网（问远端的 HEAD 提交），所以它是单独一次点击，
-       * 不在打开设置页时顺手做掉。
+      * 用户点击一次后先检查远端 HEAD；有新版就紧接着调用宿主安装，
+      * 不在打开设置页时顺手联网更新。
        */
       const beginUpdate = React.useCallback(async () => {
         setState(current => ({ kind: 'busy', text: t('busy.updateCheck'), status: current.status }))
@@ -1745,23 +1749,17 @@ window.__ModuleLoader__.load({
             }))
             return
           }
+          if (checked.canInstall !== true) {
+            throw new Error(t('update.autoUnavailable'))
+          }
+          setState(current => ({ kind: 'busy', text: t('busy.updateApply'), status: current.status }))
+          const done = await request(ROUTES.update, { step: 'confirm', token: checked.token })
           setState(current => ({
-            kind: 'review',
-            count: 0,
+            kind: 'done',
+            text: t('result.updated', { to: shortOr(done.to) }),
             status: current.status,
-            overview: current.overview ?? null,
-            skipped: current.skipped ?? [],
-            pending: {
-              kind: 'update',
-              token: checked.token,
-              compat: null,
-              // from 认不出来时保持 null，交给 Pending 挑句子——
-              // 填个 '?' 会被当成正常值，最后渲染出「有新版本：? → ca727d9」。
-              update: { from: checked.from ?? null, to: checked.to ?? null },
-              confirmLabel: t('action.confirmUpdate'),
-              text: t('pending.update', { spec: checked.nextSpec ?? '' }),
-            },
           }))
+          void load()
         } catch (error) {
           setState(current => ({ kind: 'error', message: error.message, status: current.status }))
         }
