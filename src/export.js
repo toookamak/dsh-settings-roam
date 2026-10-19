@@ -111,7 +111,7 @@ function buildManifest(input, written) {
       const content = entry?.content ?? ''
       const record = {
         path,
-        bytes: Buffer.byteLength(content, 'utf8'),
+        bytes: Buffer.isBuffer(content) ? content.length : Buffer.byteLength(content, 'utf8'),
         sha256: hashContent(content),
       }
       // 可执行位单独记一笔：技能里的脚本靠它工作，丢了就在目标机器上静默失效

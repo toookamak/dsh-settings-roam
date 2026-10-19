@@ -187,6 +187,7 @@ export function createGitBackend(config) {
     async readFile(relPath) {
       const abs = join(workDir, relPath)
       if (!existsSync(abs)) return null
+      if (relPath.startsWith('skills/')) return readFileSync(abs)
       return readFileSync(abs, 'utf8')
     },
 

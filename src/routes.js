@@ -268,6 +268,9 @@ export function createRouteHandlers(deps) {
         summary: plan.summary,
         comparedWithRemote: plan.comparedWithRemote,
         exported: plan.exported,
+        // 列出本次会写入远端的文件。清单 snapshot.json 会自动更新，不含本机专属配置。
+        transfers: plan.transfers ?? [],
+        verifiedRemoteFileCount: plan.verifiedRemoteFileCount ?? 0,
         // 只回文件路径名，不回内容：内容可能很大，而界面只给概述。
         files: plan.files.map(f => f.path),
         skillCheck: plan.skillCheck,
@@ -300,6 +303,8 @@ export function createRouteHandlers(deps) {
         token: stash('pull', plan),
         summary: plan.summary,
         skillCheck: plan.skillCheck,
+        transfers: plan.transfers ?? [],
+        verifiedRemoteFileCount: plan.verifiedRemoteFileCount ?? 0,
         // 兼容性检查：哪些项写下去不会生效、哪些会覆盖掉本机的东西。
         // blocked 为真时界面不该让用户点下确认。
         compat: plan.compat ?? null,

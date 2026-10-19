@@ -135,7 +135,7 @@ export function readPackage(dir, fsLike = { existsSync, readFileSync }) {
     if (path === '') continue
     const abs = join(dir, safeRelPath(path))
     if (!fsLike.existsSync(abs)) continue
-    files.push({ path, content: fsLike.readFileSync(abs, 'utf8'), bytes: record?.bytes })
+    files.push({ path, content: fsLike.readFileSync(abs), bytes: record?.bytes })
   }
 
   return { dir, manifest, files, unlisted: [] }
@@ -185,7 +185,7 @@ export function validatePackage(pkg) {
     }
 
     if (typeof record.bytes === 'number') {
-      const actual = Buffer.byteLength(file.content, 'utf8')
+      const actual = Buffer.isBuffer(file.content) ? file.content.length : Buffer.byteLength(file.content, 'utf8')
       if (actual !== record.bytes) {
         errors.push(`${file.path} 的大小与清单不符（清单记 ${record.bytes} 字节，实际 ${actual} 字节）`)
       }
@@ -240,7 +240,7 @@ export function planImport(pkg) {
       // 驱动官方安装流程是第三期的事——现在把它写进报告，
       // 用户至少知道自己当初装过哪些插件。
       try {
-        pluginNames = JSON.parse(file.content)
+        pluginNames = JSON.parse(Buffer.isBuffer(file.content) ? file.content.toString('utf8') : file.content)
       } catch {
         refuse(path, 'unreadable', '插件名单不是合法 JSON，已忽略这一项。')
       }
@@ -250,7 +250,7 @@ export function planImport(pkg) {
     if (path === PACKAGE_PATHS.patch) {
       let rows
       try {
-        rows = parsePatchList(file.content)
+        rows = parsePatchList(Buffer.isBuffer(file.content) ? file.content.toString('utf8') : file.content)
       } catch (error) {
         refuse(path, 'unreadable', `公共配置不是合法的 Loader patch：${error?.message ?? error}`)
         continue

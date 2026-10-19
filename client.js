@@ -96,7 +96,7 @@ window.__ModuleLoader__.load({
         title: '设置漫游',
         intro: '这里只管能跟着你走的配置（模型与接口地址）。本机地址、主题、工具权限、默认模型留在本机，不会跟着走。',
         config: {
-          title: '云端仓库',
+          title: '云端存储',
           loading: '正在读取配置…',
           unavailable: '设置服务还没就绪，配置项暂时不可编辑。等页面重新加载后再试。',
           saving: '正在保存…',
@@ -104,7 +104,25 @@ window.__ModuleLoader__.load({
           failed: '没有保存成功。多半是这个条目在别处也被声明了（例如 profile 的 cordis.patch.yml 或启动参数），那样写入会被它覆盖。',
           repoUrl: {
             label: '仓库地址',
-            hint: '远程 Git 仓库地址。填上之后「推送」「拉取」才可用。',
+            hint: 'Git 方式使用的远程仓库地址。选择 git 后填写。',
+          },
+          backendKind: {
+            label: '云端存储方式',
+            hint: '选择一种存储方式。',
+            git: 'Git',
+            webdav: 'WebDAV',
+          },
+          webdavUrl: {
+            label: 'WebDAV 地址',
+            hint: '填写服务器提供的完整 HTTPS 地址。WebDAV 会原位覆盖文件，历史版本取决于服务器设置。',
+          },
+          webdavUsername: {
+            label: 'WebDAV 用户名',
+            hint: '匿名访问可留空。账号保存在本机 profile 配置中。',
+          },
+          webdavPassword: {
+            label: 'WebDAV 密码',
+            hint: '以明文保存在本机 profile 配置，并通过 HTTPS 连接服务器；不会进入同步文件或上传到云端。',
           },
           branch: {
             label: '备份放在哪条分支',
@@ -125,7 +143,7 @@ window.__ModuleLoader__.load({
         },
         status: {
           loading: '正在读取本机配置…',
-          needsConfig: '还没配置云端仓库。在下面的「云端仓库」里填上地址，就能推送了。',
+          needsConfig: '还没配置云端存储。在下面选择 git 或 webdav，并填写对应地址。',
           emptyCloud: '云端还没有内容。先在这台机器上导出或推送一次。',
           clean: '本机配置已读取；是否与云端一致请执行「与云端对比」。',
           diff: '云端有 {n} 项变化待拉取。',
@@ -138,11 +156,11 @@ window.__ModuleLoader__.load({
           same: '云端与本机一致。',
           target: '对比目标',
           counts: '差异共 {total} 项：新增 {add}、修改 {modify}、删除 {delete}',
-          cloudEmpty: '云端这条分支上还没有快照（可能是分支配错了，也可能从未推送过）——下面会把本机全部内容列为「云端缺少」，这不是真正的差异。',
+          cloudEmpty: '云端目标位置还没有快照（可能是地址配错了，也可能从未推送过）——下面会把本机全部内容列为「云端缺少」，这不是真正的差异。',
           localTime: '本地关注配置最后修改',
           remoteTime: '云端最后上传',
           localTimeHint: '时间为配置文件级修改时间，不是单个字段的审计时间。',
-          remoteTimeHint: '按快照文件最近一次 Git 提交时间计算。',
+          remoteTimeHint: 'Git 使用提交时间；WebDAV 显示快照记录的生成时间。',
           never: '未知 / 暂无记录',
         },
         busy: {
@@ -178,6 +196,19 @@ window.__ModuleLoader__.load({
         pending: {
           push: '将推送 {files} 个文件，其中 {n} 项与云端不同。确认后写入云端。',
           pull: '云端有 {remote} 条配置，其中 {n} 项与本机不同。确认后改动本机。',
+          transferList: '本次涉及的项目',
+          cloudVerified: '已逐项校验云端清单与文件摘要：{n} 个文件通过。',
+          pushChanged: '云端内容将更新',
+          pushSame: '与云端一致（仍会写入）',
+          pullAdd: '从云端新增到本机',
+          pullModify: '用云端内容更新本机',
+          pullSame: '与本机一致（仍会应用）',
+          fieldAdd: '新增到本机',
+          fieldModify: '覆盖本机同名字段',
+          fieldRemove: '云端未包含，本机该字段将移除',
+          manifestAuto: '云端清单 snapshot.json 会在确认后自动更新。',
+          localRetained: '本机独有的配置和技能会保留，不会删除。',
+          cloudRetained: '云端独有的项目会保留，不会删除。',
           import: '将写回 {n} 项，本机原有的监听地址、主题等不受影响。确认后改动本机。',
           edit: '将改动 {n} 处配置。确认后写入并重跑插件。',
           update: '会把依赖改成 {spec}，更新完要重启 DSH。确认后开始更新。',
@@ -228,7 +259,7 @@ window.__ModuleLoader__.load({
         title: 'Settings Roam',
         intro: 'This section only carries settings that can travel (models and endpoints). Machine addresses, theme, tool permissions, and the default model stay here.',
         config: {
-          title: 'Cloud repository',
+          title: 'Cloud storage',
           loading: 'Reading configuration…',
           unavailable: 'The settings service is not ready, so these fields cannot be edited yet. Reload the page and try again.',
           saving: 'Saving…',
@@ -236,8 +267,12 @@ window.__ModuleLoader__.load({
           failed: 'The change was not saved. This entry is most likely declared somewhere else too (for example the profile cordis.patch.yml or the command line), which would override the edit.',
           repoUrl: {
             label: 'Repository URL',
-            hint: 'Remote Git repository. Push and Pull become available once this is set.',
+            hint: 'Remote Git repository used when git is selected.',
           },
+          backendKind: { label: 'Cloud storage', hint: 'Choose a storage method.', git: 'Git', webdav: 'WebDAV' },
+          webdavUrl: { label: 'WebDAV URL', hint: 'Enter the full HTTPS URL from your server. Files are overwritten in place; version history depends on the server.' },
+          webdavUsername: { label: 'WebDAV username', hint: 'Leave blank for anonymous access. Stored in this machine\'s profile config.' },
+          webdavPassword: { label: 'WebDAV password', hint: 'Stored as plain text in this machine\'s profile config and sent over HTTPS; never included in sync files or uploaded.' },
           branch: {
             label: 'Branch for the backup',
             hint: 'One repository can hold backups from several plugins, each on its own branch. Empty uses settings-roam.',
@@ -257,7 +292,7 @@ window.__ModuleLoader__.load({
         },
         status: {
           loading: 'Reading local settings…',
-          needsConfig: 'No cloud repository yet. Fill in the repository URL under \u201cCloud repository\u201d below to enable pushing.',
+          needsConfig: 'Cloud storage is not configured. Choose git or webdav and enter its address below.',
           emptyCloud: 'The cloud is still empty. Export or push once from this machine first.',
           clean: 'Local settings loaded; use Compare with cloud to verify sync status.',
           diff: '{n} changes on the cloud are waiting to be pulled.',
@@ -270,11 +305,11 @@ window.__ModuleLoader__.load({
           same: 'The cloud and this machine match.',
           target: 'Compared with',
           counts: '{total} change(s): {add} added, {modify} modified, {delete} removed',
-          cloudEmpty: 'This branch has no snapshot in the cloud yet — the branch may be wrong, or nothing was ever pushed. Every local file is listed as missing in the cloud, which is not a real difference.',
+          cloudEmpty: 'There is no snapshot at this cloud location yet. The address may be wrong, or nothing has been pushed. Every local file appears missing, which is not a real difference.',
           localTime: 'Local tracked settings last modified',
           remoteTime: 'Cloud last uploaded',
           localTimeHint: 'File-level modification time, not a per-field audit time.',
-          remoteTimeHint: 'Based on the latest Git commit that changed the snapshot file.',
+          remoteTimeHint: 'Git uses its commit time; WebDAV uses the snapshot generation time.',
           never: 'Unknown / no record',
         },
         busy: {
@@ -310,6 +345,19 @@ window.__ModuleLoader__.load({
         pending: {
           push: 'This pushes {files} files, {n} of them differing from the cloud. Confirm to write it.',
           pull: 'The cloud holds {remote} entries, {n} of them differing from this machine. Confirm to change this machine.',
+          transferList: 'Items in this operation',
+          cloudVerified: 'Cloud manifest and file checks passed: {n} file(s).',
+          pushChanged: 'Cloud copy will be updated',
+          pushSame: 'Already matches cloud (still written)',
+          pullAdd: 'Add from cloud to this machine',
+          pullModify: 'Update this machine from cloud',
+          pullSame: 'Already matches this machine (still applied)',
+          fieldAdd: 'Add to this machine',
+          fieldModify: 'Replace the field on this machine',
+          fieldRemove: 'Missing in cloud; remove this field locally',
+          manifestAuto: 'The cloud manifest snapshot.json is updated after confirmation.',
+          localRetained: 'Machine-only settings and skills are kept; nothing is deleted.',
+          cloudRetained: 'Cloud-only items are kept; nothing is deleted.',
           import: 'This writes {n} items. This machine\u2019s own listen address, theme, and so on are left alone. Confirm to change this machine.',
           edit: 'This changes {n} settings. Confirm to write them and reload the plugin.',
           update: 'The dependency will be set to {spec}; DSH must be restarted afterwards. Update now?',
@@ -503,12 +551,16 @@ window.__ModuleLoader__.load({
     let hostContext = null
 
     /** 我们自己声明的配置字段，用来在设置目录里认出本插件的那一条。 */
-    const FIELD_KEYS = ['repoUrl', 'branch', 'profileName', 'exportRoot', 'importRoot']
+    const FIELD_KEYS = ['backendKind', 'repoUrl', 'branch', 'webdavUrl', 'webdavUsername', 'webdavPassword', 'profileName', 'exportRoot', 'importRoot']
 
     /** 表单里要画出来的字段，顺序即界面顺序。 */
     const FIELDS = [
+      { key: 'backendKind', copy: 'backendKind', options: ['git', 'webdav'] },
       { key: 'repoUrl', copy: 'repoUrl' },
       { key: 'branch', copy: 'branch' },
+      { key: 'webdavUrl', copy: 'webdavUrl' },
+      { key: 'webdavUsername', copy: 'webdavUsername' },
+      { key: 'webdavPassword', copy: 'webdavPassword', type: 'password' },
       { key: 'profileName', copy: 'profileName' },
       { key: 'exportRoot', copy: 'exportRoot' },
       { key: 'importRoot', copy: 'importRoot' },
@@ -557,6 +609,10 @@ window.__ModuleLoader__.load({
       '.roam-pick-options{display:flex;flex-wrap:wrap;gap:8px}',
       '.roam-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
       '.roam-pending-text{margin:0;font-size:13px;line-height:20px}',
+      '.roam-transfer-list{display:flex;flex-direction:column;gap:6px;max-height:260px;overflow:auto;font-size:12px;line-height:18px}',
+      '.roam-transfer-list ul{margin:0;padding-left:18px}',
+        '.roam-transfer-list{display:flex;flex-direction:column;gap:6px;max-height:260px;overflow:auto;font-size:12px;line-height:18px}',
+        '.roam-transfer-list ul{margin:0;padding-left:18px}',
       '.roam-pending-actions{display:flex;gap:8px}',
       '.roam-compat{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}',
       '.roam-compat-item{font-size:12px;line-height:18px}',
@@ -717,14 +773,26 @@ window.__ModuleLoader__.load({
      */
     function Field({ field, value, disabled, t, onChange, onCommit }) {
       const copy = `config.${field.copy}`
-      return h(
-        'div',
-        { className: 'roam-field' },
-        h('label', { className: 'roam-field-label', htmlFor: `roam-${field.key}` }, t(`${copy}.label`)),
-        h(Input, {
+      const control = field.options
+        ? h('div', { className: 'roam-actions' }, field.options.map(option => h(
+          Button,
+          {
+            key: option,
+            size: 'sm',
+            variant: String(value).toLowerCase() === option ? 'primary' : 'outline',
+            disabled,
+            onClick: () => {
+              onChange(field.key, option)
+              onCommit(field.key, option)
+            },
+          },
+          t(`${copy}.${option}`),
+        )))
+        : h(Input, {
           id: `roam-${field.key}`,
           className: 'roam-field-input',
           value,
+          type: field.type ?? 'text',
           disabled,
           spellCheck: false,
           autoComplete: 'off',
@@ -735,7 +803,12 @@ window.__ModuleLoader__.load({
           onKeyDown: event => {
             if (event.key === 'Enter') event.currentTarget.blur()
           },
-        }),
+        })
+      return h(
+        'div',
+        { className: 'roam-field' },
+        h('label', { className: 'roam-field-label', htmlFor: `roam-${field.key}` }, t(`${copy}.label`)),
+        control,
         h('p', { className: 'roam-field-hint' }, t(`${copy}.hint`)),
       )
     }
@@ -840,6 +913,12 @@ window.__ModuleLoader__.load({
 
       /** 草稿优先，其次才是已保存的值。 */
       const shown = key => (drafts[key] !== undefined ? drafts[key] : (values[key] ?? ''))
+      const backendKind = String(shown('backendKind') || 'git').trim().toLowerCase()
+      const visibleFields = FIELDS.filter(field => {
+        if (['repoUrl', 'branch'].includes(field.key)) return backendKind === 'git'
+        if (['webdavUrl', 'webdavUsername', 'webdavPassword'].includes(field.key)) return backendKind === 'webdav'
+        return true
+      })
 
       /**
        * 落盘一个字段。
@@ -893,7 +972,7 @@ window.__ModuleLoader__.load({
         'div',
         { className: 'roam-card roam-config' },
         h('p', { className: 'roam-card-title' }, t('config.title')),
-        FIELDS.map(field => h(Field, {
+          visibleFields.map(field => h(Field, {
           key: field.key,
           field,
           value: shown(field.key),
@@ -1008,6 +1087,31 @@ window.__ModuleLoader__.load({
         'div',
         { className: 'roam-card roam-pending' },
         h('p', { className: 'roam-pending-text' }, p.text),
+        Number.isInteger(p.verifiedRemoteFileCount)
+          ? h('p', { className: 'roam-field-hint' }, t('pending.cloudVerified', { n: p.verifiedRemoteFileCount }))
+          : null,
+        Array.isArray(p.transfers) && p.transfers.length > 0
+          ? h('div', { className: 'roam-transfer-list' },
+            h('p', { className: 'roam-card-title' }, t('pending.transferList')),
+            h('ul', null, p.transfers.map(item => h('li', { key: item.path },
+              h('span', { className: 'roam-mono' }, item.path),
+              ' — ',
+              p.kind === 'push'
+                ? t(item.changed ? 'pending.pushChanged' : 'pending.pushSame')
+                : t(item.action === 'add' ? 'pending.pullAdd' : item.action === 'modify' ? 'pending.pullModify' : 'pending.pullSame'),
+              Array.isArray(item.details) && item.details.length > 0
+                ? h('ul', null, item.details.map(detail => h('li', { key: detail.path },
+                  h('span', { className: 'roam-mono' }, detail.path),
+                  ' — ',
+                  t(`pending.field${detail.action[0].toUpperCase()}${detail.action.slice(1)}`),
+                )))
+                : null,
+            ))),
+            p.kind === 'push' ? h('p', { className: 'roam-field-hint' }, t('pending.manifestAuto')) : null,
+            p.kind === 'pull' ? h('p', { className: 'roam-field-hint' }, t('pending.localRetained')) : null,
+            p.kind === 'push' ? h('p', { className: 'roam-field-hint' }, t('pending.cloudRetained')) : null,
+          )
+          : null,
         // 更新与其它动作不同：它换的是「这个插件从哪来」。
         // 只给一句「确认吗」，用户没法判断这跟自己装的那一版差了多少。
         p.update
@@ -1256,7 +1360,7 @@ window.__ModuleLoader__.load({
           : null,
         h('p', null, `${t('comparison.localTime')}：${formatTime(result.localConfigModifiedAt)}`),
         h('small', null, t('comparison.localTimeHint')),
-        h('p', null, `${t('comparison.remoteTime')}：${formatTime(result.remoteUploadedAt)}`),
+        h('p', null, `${t('comparison.remoteTime')}：${formatTime(result.remoteUploadedAt ?? result.remoteSnapshotGeneratedAt)}`),
         h('small', null, t('comparison.remoteTimeHint')),
         // 云端这条分支还没有快照时，「全部内容都在云端缺失」不是真正的差异，
         // 必须先说清楚，否则一屏差异会被当成「云端确实和本机不一样」。
@@ -1500,6 +1604,8 @@ window.__ModuleLoader__.load({
               kind,
               token: prepared.token,
               compat: prepared.compat ?? null,
+              transfers: prepared.transfers ?? [],
+              verifiedRemoteFileCount: prepared.verifiedRemoteFileCount,
               confirmLabel: t(spec.confirmLabel),
               text: t(spec.pending, {
                 n: total,

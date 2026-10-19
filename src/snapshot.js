@@ -26,6 +26,7 @@ export function buildSnapshot(input) {
       path: f.path,
       kind: f.kind,
       hash: hashOf(f.content),
+      ...(f.executable === true ? { executable: true } : {}),
     })),
   }
 }

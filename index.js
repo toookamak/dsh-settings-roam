@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import z from '@deepseek-ai/schemastery'
 import { resolveDshHome } from './src/home-paths.js'
 import { createGitBackend } from './src/backends/git.js'
+import { createWebDavBackend } from './src/backends/webdav.js'
 import { createSyncService } from './src/service.js'
 import {
   buildPushOverview,
@@ -42,13 +43,16 @@ export { DEFAULT_BRANCH } from './src/constants.js'
  * 随 harness 发行、不在 npm 上独立可装。声明成硬依赖会让插件在别的机器上装不上。
  * 官方生态里的第三方插件（如 dshmarket）正是用 optional peerDependency 处理这件事。
  *
- * 字段说明刻意写成用户能读懂的话：设置页上原样显示这些字符串，
- * 「repoUrl」这种词对产品使用者没有意义。未接入的字段一律注明「尚未生效」——
+ * 字段说明刻意写成用户能读懂的话：设置页上原样显示这些字符串。
+ * 未接入的字段一律注明「尚未生效」——
  * 宁可看起来没做完，也不要让人以为它已经在工作。
  */
 export const Config = z.object({
+  backendKind: z.string().default('git').description(
+    '云端存储方式：git 或 webdav。选择后只使用对应的地址配置。',
+  ).volatile(),
   repoUrl: z.string().default('').description(
-    '云端仓库地址，用于把公共配置存到远端（第三阶段）。留空时插件仍可使用，只是不能推送与拉取。',
+    'Git 方式使用的远程仓库地址。选择 git 时填写；留空时仍可使用本地导入导出。',
   ).volatile(),
   profileName: z.string().default('').description(
     '要同步哪个 profile。留空时自动：只有一个就用它，多于一个会明确报错，不会替你猜。',
@@ -61,6 +65,15 @@ export const Config = z.object({
   ).volatile(),
   branch: z.string().default('').description(
     '备份放在仓库的哪条分支。一个仓库可以放多个插件的备份，各占一条分支；留空用 settings-roam。',
+  ).volatile(),
+  webdavUrl: z.string().default('').description(
+    'WebDAV 目标目录地址。仅使用 HTTPS，建议为设置漫游单独建一个空目录。',
+  ).volatile(),
+  webdavUsername: z.string().default('').description(
+    'WebDAV 账号；可留空用于匿名访问。账号与密码只保存在本机 profile 配置，不会同步到云端。',
+  ).volatile(),
+  webdavPassword: z.string().default('').description(
+    'WebDAV 密码；仅保存在本机 profile 配置并发送给 WebDAV 服务器，不会写入同步文件。',
   ).volatile(),
 })
 
@@ -109,7 +122,7 @@ export const inject = ['settings', 'skills']
  * @param {string} [config.repoUrl] - 云端仓库地址；留空时插件装着但待配置
  * @param {string} [config.profileName] - 指定同步哪个 profile；留空时自动判定
  * @param {string} [config.exportRoot] - 导出目录；留空时用数据根目录下的默认位置
- * @param {string} [config.backendKind] - 介质类型，第一期只支持 'git'
+ * @param {string} [config.backendKind] - 介质类型：'git' 或 'webdav'
  */
 export function apply(ctx, config) {
   const dshRoot = resolveDshHome(config?.dshHome)
@@ -158,6 +171,17 @@ export function apply(ctx, config) {
     // 所以用可选注入捕获一个引用，再由 getter 惰性返回当时的值。
     pluginManager: () => pluginManagerRef,
     backend: () => {
+      const backendKind = (readOption('backendKind') ?? 'git').toLowerCase()
+      if (backendKind === 'webdav') {
+        const url = readOption('webdavUrl')
+        if (url === null) throw new Error('还没配置 WebDAV 地址。请在「WebDAV 地址」中填写服务器提供的完整地址。')
+        return createWebDavBackend({
+          url,
+          username: readOption('webdavUsername') ?? '',
+          password: readOption('webdavPassword') ?? '',
+        })
+      }
+      if (backendKind !== 'git') throw new Error(`不支持的云端存储方式：${backendKind}。请选择 git 或 webdav。`)
       const repoUrl = readOption('repoUrl')
       if (repoUrl === null) {
         // 交给 createGitBackend 去拼 git 命令会得到一个难以理解的报错，
@@ -180,9 +204,9 @@ export function apply(ctx, config) {
   // 实测：schemastery 不剥离未知键（见 test/config.test.js 的核对结论），
   // 所以用户在 cordis.patch.yml 里把 repoUrl 敲成 repourl 时既不会报错、
   // 也不会生效，表现为「我明明填了，插件却说没配置」。这类问题如果不在
-  // 启动日志里说破，用户只能靠猜。dshHome 与 backendKind 是刻意保留的
-  // 测试/多实例开关，不在 Config 里，故显式放行。
-  const knownKeys = new Set([...Object.keys(Config.dict ?? {}), 'dshHome', 'backendKind'])
+  // 启动日志里说破，用户只能靠猜。dshHome 是刻意保留的测试/多实例开关，
+  // 不在 Config 里，故显式放行。
+  const knownKeys = new Set([...Object.keys(Config.dict ?? {}), 'dshHome'])
   for (const key of Object.keys(config ?? {})) {
     if (!knownKeys.has(key)) {
       ctx.logger?.warn?.(
@@ -254,6 +278,6 @@ export function apply(ctx, config) {
   ctx.logger?.info?.(
     '设置漫游已就绪，数据根目录：%s%s',
     dshRoot,
-    service.isConfigured() ? '' : '（尚未配置云端仓库）',
+    service.isConfigured() ? '' : '（尚未配置云端存储）',
   )
 }

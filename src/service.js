@@ -86,6 +86,62 @@ function hashOf(content) {
   return createHash('sha256').update(content).digest('hex').slice(0, 16)
 }
 
+function safeSnapshotPath(path) {
+  return typeof path === 'string'
+    && path !== ''
+    && !path.startsWith('/')
+    && !path.includes('\\')
+    && !path.split('/').some(part => part === '' || part === '.' || part === '..')
+    && (/^config\/(profile\.patch\.yml|bundles\.json)$/.test(path)
+      || path === 'notes.md'
+      || path.startsWith(PACKAGE_PATHS.skillsPrefix))
+}
+
+async function readVerifiedSnapshot(backend) {
+  const text = await backend.readFile(CLOUD_PATHS.snapshot)
+  if (text === null) return { text: null, snapshot: null, files: new Map() }
+  const snapshot = parseSnapshot(text)
+  const files = new Map()
+  const seen = new Set()
+  for (const entry of snapshot.entries) {
+    if (!safeSnapshotPath(entry?.path) || seen.has(entry.path)) {
+      throw new Error('云端快照包含无效或重复的文件路径，已停止同步。')
+    }
+    seen.add(entry.path)
+    const content = await backend.readFile(entry.path)
+    if (content === null) throw new Error(`云端文件缺失，已停止同步：${entry.path}`)
+    if (typeof entry.hash !== 'string' || hashOf(content) !== entry.hash) {
+      throw new Error(`云端文件校验不一致，已停止同步：${entry.path}。请检查云端副本后再试。`)
+    }
+    files.set(entry.path, content)
+  }
+  return { text, snapshot, files }
+}
+
+function patchFieldTransfers(localRows, remoteRows, direction) {
+  const local = new Map((localRows ?? []).map(row => [row.id, row]))
+  const remote = new Map((remoteRows ?? []).map(row => [row.id, row]))
+  const destination = direction === 'pull' ? remote : local
+  const source = direction === 'pull' ? local : remote
+  const items = []
+  for (const [id, next] of destination) {
+    const previous = source.get(id)
+    const before = new Map(flattenConfig(previous?.config ?? {}).map(field => [field.path, field.value]))
+    const after = new Map(flattenConfig(next?.config ?? {}).map(field => [field.path, field.value]))
+    const paths = new Set([...before.keys(), ...after.keys()])
+    for (const path of paths) {
+      const had = before.has(path)
+      const has = after.has(path)
+      if (had === has && JSON.stringify(before.get(path)) === JSON.stringify(after.get(path))) continue
+      items.push({
+        path: `patch:${id}.config.${path}`,
+        action: !has ? 'remove' : !had ? 'add' : 'modify',
+      })
+    }
+  }
+  return items
+}
+
 /**
  * 从 patch 文本里收集 provider 的 apiKeyEnv 引用名。
  *
@@ -359,7 +415,7 @@ export function createSyncService(config) {
       for (const record of scanSkills(skillsRoot, [name])) {
         const abs = join(skillsRoot, record.relPath)
         out[`skills/${record.relPath}`] = {
-          content: readFileSync(abs, 'utf8'),
+          content: readFileSync(abs),
           executable: record.executable,
         }
       }
@@ -785,8 +841,8 @@ async function crossCheck() {
         generatedAt: new Date().toISOString(),
         files,
       })
-      const remoteText = await backend.readFile(CLOUD_PATHS.snapshot)
-      const remoteSnapshot = remoteText ? parseSnapshot(remoteText) : { entries: [], generatedAt: null }
+      const verified = await readVerifiedSnapshot(backend)
+      const remoteSnapshot = verified.snapshot ?? { entries: [], generatedAt: null }
       const diff = diffSnapshots(remoteSnapshot, localSnapshot)
       return {
         diff,
@@ -797,7 +853,7 @@ async function crossCheck() {
           ? await backend.lastUploadAt()
           : null,
         remoteSnapshotGeneratedAt: remoteSnapshot.generatedAt ?? null,
-        remoteSnapshotExists: remoteText !== null,
+        remoteSnapshotExists: verified.text !== null,
         remoteDescription: typeof backend.describe === 'function' ? backend.describe() : null,
       }
     },
@@ -845,14 +901,16 @@ async function crossCheck() {
       // 此时把所有内容视为「新增」，并在结果里标明未与云端比对，
       // 避免界面上出现一个看起来像「全部都要新增」的误导性差异。
       let remoteEntries = []
+      let remoteFiles = new Map()
+      let remoteRevision = null
       let comparedWithRemote = false
       if (backend !== null) {
         await backend.ensureReady()
         await backend.pull()
-        const remoteSnapshotText = await backend.readFile(CLOUD_PATHS.snapshot)
-        remoteEntries = remoteSnapshotText === null
-          ? []
-          : (JSON.parse(remoteSnapshotText).entries ?? [])
+        const verified = await readVerifiedSnapshot(backend)
+        remoteEntries = verified.snapshot?.entries ?? []
+        remoteFiles = verified.files
+        remoteRevision = verified.text === null ? null : hashOf(verified.text)
         comparedWithRemote = true
       }
 
@@ -862,6 +920,8 @@ async function crossCheck() {
         files,
       })
       const diff = diffSnapshots({ entries: remoteEntries }, localSnapshot)
+      const remotePatchText = remoteFiles.get(CLOUD_PATHS.patch) ?? null
+      const remotePatchRows = remotePatchText === null ? [] : parsePatchList(remotePatchText)
 
       // 云端已有的其它文件（如 bundles.json、notes.md）不在本次推送范围，
       // 但它们仍在云端，摘要要保留，否则下次比对会误判为「本机没有」。
@@ -899,6 +959,15 @@ async function crossCheck() {
       return {
         files: [...files, snapshotFile],
         diff,
+        transfers: files.map(file => ({
+          path: file.path,
+          changed: diff.some(item => item.path === file.path && item.action !== 'delete'),
+          details: file.path === CLOUD_PATHS.patch
+            ? patchFieldTransfers(patch, remotePatchRows, 'push')
+            : [],
+        })),
+        remoteRevision,
+        verifiedRemoteFileCount: remoteEntries.length,
         summary: summarizeDiff(diff),
         patchRows: patch,
         skillCheck,
@@ -918,6 +987,12 @@ async function crossCheck() {
     async confirmPush(plan, message = '设置漫游：推送') {
       const backend = requireBackend()
       await backend.ensureReady()
+      await backend.pull()
+      const latest = await readVerifiedSnapshot(backend)
+      const latestRevision = latest.text === null ? null : hashOf(latest.text)
+      if (plan?.remoteRevision !== undefined && latestRevision !== plan.remoteRevision) {
+        throw new Error('预览后云端内容发生了变化，本次未推送。请重新预览并核对差异。')
+      }
       for (const file of plan.files) {
         await backend.writeFile(file.path, file.content)
       }
@@ -935,7 +1010,10 @@ async function crossCheck() {
       await backend.ensureReady()
       await backend.pull()
 
-      const patchText = await backend.readFile(CLOUD_PATHS.patch)
+      const verified = await readVerifiedSnapshot(backend)
+      const snapshot = verified.snapshot
+      const verifiedFiles = verified.files
+      const patchText = verifiedFiles.get(CLOUD_PATHS.patch) ?? null
       const remoteRows = patchText === null ? [] : parsePatchList(patchText)
 
       const localRows = readLocalRows()
@@ -943,12 +1021,18 @@ async function crossCheck() {
         path: `patch:${row.id}`,
         kind: 'shared',
         hash: hashOf(JSON.stringify(row)),
-      }))
+      })).concat(Object.entries(collectSkillFiles()).map(([path, entry]) => ({
+        path,
+        kind: 'shared',
+        hash: hashOf(entry.content),
+      })))
       const remoteEntries = remoteRows.map(row => ({
         path: `patch:${row.id}`,
         kind: 'shared',
         hash: hashOf(JSON.stringify(row)),
-      }))
+      })).concat((snapshot?.entries ?? [])
+        .filter(entry => typeof entry.path === 'string' && entry.path.startsWith(PACKAGE_PATHS.skillsPrefix))
+        .map(entry => ({ path: entry.path, kind: 'shared', hash: entry.hash })))
 
       const diff = diffSnapshots({ entries: localEntries }, { entries: remoteEntries })
 
@@ -957,19 +1041,11 @@ async function crossCheck() {
       // 原先这里只读了配置，于是「拉取」把供应商定义带回来了、技能却没带回来，
       // 而报告上一个字都没提，看起来像技能本来就不同步。
       const remoteSkillFiles = []
-      const snapshotText = await backend.readFile(CLOUD_PATHS.snapshot)
-      if (snapshotText !== null && snapshotText !== '') {
-        let entries = []
-        try {
-          entries = JSON.parse(snapshotText).entries ?? []
-        } catch {
-          entries = []
-        }
-        for (const entry of entries) {
+      if (snapshot !== null) {
+        for (const entry of snapshot.entries) {
           const path = entry?.path
           if (typeof path !== 'string' || !path.startsWith(PACKAGE_PATHS.skillsPrefix)) continue
-          const content = await backend.readFile(path)
-          if (content === null) continue
+          const content = verifiedFiles.get(path)
           remoteSkillFiles.push({
             path,
             content,
@@ -984,7 +1060,7 @@ async function crossCheck() {
 
       // 云端记着上次推送时的插件名单，拿它做恢复前检查：
       // 名单里有而本机没装的插件，配置会照常写回但要等插件装上才有用。
-      const bundlesText = await backend.readFile(CLOUD_PATHS.bundles)
+      const bundlesText = verifiedFiles.get(CLOUD_PATHS.bundles) ?? null
       let cloudBundles = null
       if (bundlesText !== null && bundlesText !== '') {
         try {
@@ -999,10 +1075,29 @@ async function crossCheck() {
         remoteSkillFiles,
         bundleNames: cloudBundles,
       })
+      const patchChanges = patchFieldTransfers(localRows, remoteRows, 'pull')
 
       return {
         diff,
         summary: summarizeDiff(diff),
+        // 确认预览只列真正会从云端应用的项；本机独有项会保留，不会删除。
+        transfers: [
+          ...remoteRows.map(row => ({
+            path: `patch:${row.id}`,
+            action: diff.find(item => item.path === `patch:${row.id}`)?.action ?? 'same',
+            changed: diff.some(item => item.path === `patch:${row.id}` && item.action !== 'delete'),
+            details: patchChanges
+              .filter(item => item.path.startsWith(`patch:${row.id}.`)),
+          })),
+          ...remoteSkillFiles.map(file => ({
+            path: file.path,
+            action: diff.find(item => item.path === file.path)?.action ?? 'same',
+            changed: diff.some(item => item.path === file.path && item.action !== 'delete'),
+            details: [],
+          })),
+        ],
+        remoteRevision: verified.text === null ? null : hashOf(verified.text),
+        verifiedRemoteFileCount: snapshot?.entries.length ?? 0,
         remoteRows,
         remotePatchText: patchText,
         remoteSkillFiles,
@@ -1020,6 +1115,16 @@ async function crossCheck() {
      * @returns {Promise<object>} RestoreReport
      */
     async applyPull(plan, options) {
+      if (plan?.remoteRevision !== undefined) {
+        const backend = requireBackend()
+        await backend.ensureReady()
+        await backend.pull()
+        const latest = await readVerifiedSnapshot(backend)
+        const latestRevision = latest.text === null ? null : hashOf(latest.text)
+        if (latestRevision !== plan.remoteRevision) {
+          throw new Error('预览后云端内容发生了变化，本次未写入本机。请重新预览并核对差异。')
+        }
+      }
       // 兼容性检查里只要有一条 block 级别的问题，就停下来。
       //
       // 这类问题的共同特征是「写下去不报错，只是不生效、或者覆盖掉别的东西」——
