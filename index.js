@@ -81,6 +81,9 @@ export const Config = z.object({
   uploadPluginIds: z.string().default('["llm-pi-ai"]').description(
     '允许推送的插件配置 ID 列表（JSON 数组）；设置页中可勾选。默认仅包含已确认可移植的 llm-pi-ai。',
   ).volatile(),
+  uploadBundleNames: z.string().default('').description(
+    '允许推送的第三方插件名称列表（JSON 数组）；留空时默认包含本机已安装的全部第三方插件。',
+  ).volatile(),
   downloadPluginIds: z.string().default('["llm-pi-ai"]').description(
     '允许拉取并覆盖的插件配置 ID 列表（JSON 数组）；设置页中可勾选。默认仅包含已确认可移植的 llm-pi-ai。',
   ).volatile(),

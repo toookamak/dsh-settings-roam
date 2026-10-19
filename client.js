@@ -138,6 +138,11 @@ window.__ModuleLoader__.load({
             hint: '只应用勾选的云端插件配置，确认前会显示具体改动并自动备份本机文件。不会安装插件。',
             empty: '本机没有可选的插件配置条目。',
           },
+          uploadBundleNames: {
+            label: '勾选要上传的第三方插件',
+            hint: '只记录插件名称，不会安装插件，也不会同步插件自身数据。留空配置时默认全选。',
+            empty: '本机没有可选的第三方插件。',
+          },
           branch: {
             label: '备份放在哪条分支',
             hint: '同一个仓库可以放多个插件的备份，各占一条分支，免得互相覆盖。留空用 settings-roam。',
@@ -280,6 +285,10 @@ window.__ModuleLoader__.load({
           failed: '同步范围保存失败，请重试。',
           remoteUnavailable: '暂时无法读取云端配置候选项；本机配置仍可选择上传。',
           noItems: '本机没有可选配置项。',
+          pluginsTitle: '第三方插件名单',
+          pluginsHint: '勾选要记录到云端的插件名称。DSH 自带插件已排除；这里只记录名称，不会安装插件或同步插件自身数据。',
+          pluginUpload: '上传',
+          pluginsUnavailable: '暂时无法读取插件名单。',
         },
         skips: { title: '这些项留在了本机' },
         result: {
@@ -315,6 +324,7 @@ window.__ModuleLoader__.load({
           webdavPassword: { label: 'WebDAV password', hint: 'Stored as plain text in this machine\'s profile config and sent over HTTPS; never included in sync files or uploaded.' },
           uploadPluginIds: { label: 'Plugin settings to upload', hint: 'Only llm-pi-ai is selected by default. Selecting a plugin uploads its full configuration; other plugin settings stay local.', empty: 'There are no selectable plugin settings on this machine.' },
           downloadPluginIds: { label: 'Plugin settings to download and overwrite', hint: 'Only selected cloud settings are applied. The preview lists changes and the local file is backed up first. Plugins are not installed.', empty: 'There are no selectable plugin settings on this machine.' },
+          uploadBundleNames: { label: 'Third-party plugins to upload', hint: 'Only plugin names are recorded; this does not install plugins or sync their own data. An empty setting selects all by default.', empty: 'There are no selectable third-party plugins on this machine.' },
           branch: {
             label: 'Branch for the backup',
             hint: 'One repository can hold backups from several plugins, each on its own branch. Empty uses settings-roam.',
@@ -457,6 +467,10 @@ window.__ModuleLoader__.load({
           failed: 'Could not save the sync scope. Try again.',
           remoteUnavailable: 'Cloud configuration choices are temporarily unavailable; local items can still be selected for upload.',
           noItems: 'No selectable local configuration items.',
+          pluginsTitle: 'Third-party plugin list',
+          pluginsHint: 'Choose which plugin names to record in the cloud. DSH built-ins are excluded; this list does not install plugins or sync their own data.',
+          pluginUpload: 'Upload',
+          pluginsUnavailable: 'Plugin list is temporarily unavailable.',
         },
         skips: { title: 'These stayed on this machine' },
         result: {
@@ -620,7 +634,7 @@ window.__ModuleLoader__.load({
     let hostContext = null
 
     /** 我们自己声明的配置字段，用来在设置目录里认出本插件的那一条。 */
-    const FIELD_KEYS = ['backendKind', 'repoUrl', 'branch', 'webdavUrl', 'webdavFolder', 'webdavUsername', 'webdavPassword', 'uploadPluginIds', 'downloadPluginIds', 'profileName', 'exportRoot', 'importRoot']
+    const FIELD_KEYS = ['backendKind', 'repoUrl', 'branch', 'webdavUrl', 'webdavFolder', 'webdavUsername', 'webdavPassword', 'uploadPluginIds', 'downloadPluginIds', 'uploadBundleNames', 'profileName', 'exportRoot', 'importRoot']
 
     /** 表单里要画出来的字段，顺序即界面顺序。 */
     const FIELDS = [
@@ -711,6 +725,10 @@ window.__ModuleLoader__.load({
       '.roam-scope-check{display:flex;align-items:center;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary);cursor:pointer}',
       '.roam-scope-check input{appearance:auto!important;-webkit-appearance:checkbox!important;width:16px;height:16px;margin:0;accent-color:var(--dsw-alias-action-primary);cursor:pointer;pointer-events:auto}',
       '.roam-scope-check input:disabled{cursor:wait}',
+      '.roam-scope-plugins{display:flex;flex-direction:column;gap:8px;padding-top:8px;border-top:0.5px solid var(--dsw-alias-border-l3)}',
+      '.roam-scope-plugin-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:6px;max-height:220px;overflow:auto}',
+      '.roam-scope-plugin{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-2);font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary);cursor:pointer;overflow-wrap:anywhere}',
+      '.roam-scope-plugin input{appearance:auto!important;-webkit-appearance:checkbox!important;flex:0 0 16px;width:16px;height:16px;margin:1px 0 0;accent-color:var(--dsw-alias-action-primary);cursor:pointer;pointer-events:auto}',
       '@media(max-width:520px){.roam-scope-head,.roam-scope-row{grid-template-columns:minmax(0,1fr) 58px 82px;gap:6px}.roam-scope-check{font-size:11px}}',
       '.roam-empty{margin:0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-tertiary)}',
       '.roam-block{display:flex;flex-direction:column;gap:12px}',
@@ -1201,37 +1219,49 @@ window.__ModuleLoader__.load({
       const snapshot = useFormSnapshot(form)
       const values = snapshot?.value ?? {}
       const localIds = status?.syncablePatchIds ?? []
-      const [options, setOptions] = React.useState({ uploadPluginIds: localIds, downloadPluginIds: localIds })
+      const localBundleNames = status?.thirdPartyBundleNames ?? []
+      const [options, setOptions] = React.useState({ uploadPluginIds: localIds, downloadPluginIds: localIds, uploadBundleNames: localBundleNames })
       const [selectionDraft, setSelectionDraft] = React.useState(null)
       const [busy, setBusy] = React.useState(false)
       const [note, setNote] = React.useState(null)
 
       React.useEffect(() => {
         let active = true
-        setOptions({ uploadPluginIds: localIds, downloadPluginIds: localIds })
+        setOptions({ uploadPluginIds: localIds, downloadPluginIds: localIds, uploadBundleNames: localBundleNames })
         if (!status?.configured) return () => { active = false }
         request('/api/settings-roam.selection')
           .then(result => {
             if (active) setOptions({
               uploadPluginIds: Array.isArray(result.uploadPluginIds) ? result.uploadPluginIds : localIds,
               downloadPluginIds: Array.isArray(result.downloadPluginIds) ? result.downloadPluginIds : localIds,
+              uploadBundleNames: Array.isArray(result.uploadBundleNames) ? result.uploadBundleNames : localBundleNames,
             })
           })
           .catch(() => {
             if (active) setNote({ tone: 'bad', text: t('scope.remoteUnavailable') })
           })
         return () => { active = false }
-      }, [status?.configured, localIds.join('|'), values.backendKind, values.repoUrl, values.branch, values.webdavUrl, values.webdavFolder, t('scope.remoteUnavailable')])
+      }, [status?.configured, localIds.join('|'), localBundleNames.join('|'), values.backendKind, values.repoUrl, values.branch, values.webdavUrl, values.webdavFolder, t('scope.remoteUnavailable')])
 
       const readSelected = key => {
         const fallback = '["llm-pi-ai"]'
         try {
-          const parsed = JSON.parse(values[key] ?? fallback)
+          const raw = values[key]
+          const parsed = JSON.parse(typeof raw === 'string' && raw.trim() !== '' ? raw : fallback)
           return new Set(Array.isArray(parsed) ? parsed.filter(id => typeof id === 'string') : [])
         } catch { return new Set() }
       }
       const upload = selectionDraft?.uploadPluginIds ?? readSelected('uploadPluginIds')
       const download = selectionDraft?.downloadPluginIds ?? readSelected('downloadPluginIds')
+      const readSelectedBundles = () => {
+        const raw = values.uploadBundleNames
+        if (typeof raw !== 'string' || raw.trim() === '') return new Set(options.uploadBundleNames)
+        try {
+          const parsed = JSON.parse(raw)
+          return new Set(Array.isArray(parsed) ? parsed.filter(name => typeof name === 'string') : [])
+        } catch { return new Set() }
+      }
+      const selectedBundles = new Set(selectionDraft?.uploadBundleNames ?? [...readSelectedBundles()])
       const ids = [...new Set([
         ...options.uploadPluginIds,
         ...options.downloadPluginIds,
@@ -1253,6 +1283,33 @@ window.__ModuleLoader__.load({
         setNote({ tone: 'saving', text: t('scope.saving') })
         try {
           const accepted = await form.set(field, JSON.stringify(next))
+          if (accepted === false) throw new Error('rejected')
+          setSelectionDraft(null)
+          setNote({ tone: 'ok', text: t('scope.saved') })
+          onSaved?.()
+        } catch {
+          setSelectionDraft(null)
+          setNote({ tone: 'bad', text: t('scope.failed') })
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      const setBundleSelected = async (name, checked) => {
+        if (busy) return
+        const selected = new Set(selectionDraft?.uploadBundleNames ?? [...readSelectedBundles()])
+        if (checked) selected.add(name)
+        else selected.delete(name)
+        const next = [...selected].sort()
+        setSelectionDraft(current => ({
+          uploadPluginIds: current?.uploadPluginIds ?? [...upload],
+          downloadPluginIds: current?.downloadPluginIds ?? [...download],
+          uploadBundleNames: next,
+        }))
+        setBusy(true)
+        setNote({ tone: 'saving', text: t('scope.saving') })
+        try {
+          const accepted = await form.set('uploadBundleNames', JSON.stringify(next))
           if (accepted === false) throw new Error('rejected')
           setSelectionDraft(null)
           setNote({ tone: 'ok', text: t('scope.saved') })
@@ -1300,6 +1357,23 @@ window.__ModuleLoader__.load({
               ),
             )),
           ),
+        h('div', { className: 'roam-scope-plugins' },
+          h('p', { className: 'roam-card-title' }, t('scope.pluginsTitle')),
+          h('p', { className: 'roam-field-hint' }, t('scope.pluginsHint')),
+          options.uploadBundleNames.length === 0
+            ? h('p', { className: 'roam-empty' }, t('scope.pluginsUnavailable'))
+            : h('div', { className: 'roam-scope-plugin-list' }, options.uploadBundleNames.map(name => h(
+              'label', { className: 'roam-scope-plugin', key: name },
+              h('input', {
+                type: 'checkbox',
+                checked: selectedBundles.has(name),
+                disabled: busy || snapshot?.writable === false,
+                onChange: event => { void setBundleSelected(name, event.target.checked) },
+                'aria-label': `${t('scope.pluginUpload')} ${name}`,
+              }),
+              h('span', null, name),
+            ))),
+        ),
         note?.text
           ? h('p', { className: 'roam-note', 'data-tone': note.tone === 'ok' ? 'ok' : note.tone === 'bad' ? 'bad' : undefined }, note.text)
           : null,

@@ -204,6 +204,7 @@ export function createRouteHandlers(deps) {
       skillCount: inspected?.skills?.length ?? 0,
       skillCheck: inspected?.skillCheck ?? null,
       syncablePatchIds: inspected?.syncablePatchIds ?? [],
+      thirdPartyBundleNames: inspected?.bundles?.thirdParty ?? [],
       // 可编辑的公共条目。列表为空时界面不渲染编辑区，
       // 而不是给一个点不动的空壳。读不到（例如还没选 profile）时给空列表：
       // 它只是个可选的便利功能，不该把整节状态一起带崩。

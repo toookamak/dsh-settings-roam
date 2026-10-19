@@ -315,6 +315,29 @@ export function createSyncService(config) {
     }
   }
 
+  /** 留空表示默认全选本机第三方插件；显式 JSON 数组才启用逐项选择。 */
+  function selectedBundleNames() {
+    const raw = readOption('uploadBundleNames')
+    if (raw === null) return null
+    try {
+      const parsed = JSON.parse(raw)
+      if (!Array.isArray(parsed)) return new Set()
+      return new Set(parsed.filter(name => typeof name === 'string' && name.trim() !== ''))
+    } catch {
+      return new Set()
+    }
+  }
+
+  function selectableBundleNames(bundles) {
+    if (bundles === null || bundles === undefined) return bundles
+    const selected = selectedBundleNames()
+    return {
+      // DSH 自带插件不作为用户插件记录到同步包。
+      official: [],
+      thirdParty: (bundles.thirdParty ?? []).filter(name => selected === null || selected.has(name)),
+    }
+  }
+
   /** 机器专属项和插入指令永不进入插件选择同步。 */
   function selectablePluginRows(rows) {
     const machineIds = new Set(MACHINE_PATCH_IDS)
@@ -921,6 +944,7 @@ async function crossCheck() {
       return {
         uploadPluginIds: [...new Set(localIds)].sort(),
         downloadPluginIds: [...new Set([...localIds, ...remoteIds])].sort(),
+        uploadBundleNames: (await collectPluginNames())?.thirdParty ?? [],
       }
     },
 
@@ -944,6 +968,7 @@ async function crossCheck() {
         : null
       const uploadIds = selectedPluginIds('uploadPluginIds')
       const patch = selectablePluginRows(rows).filter(row => uploadIds.has(row.id))
+      const bundles = selectableBundleNames(await collectPluginNames())
       const files = [
         { path: CLOUD_PATHS.patch, content: renderPatches(patch, 'settings-roam') },
         ...Object.entries(collectSkillFiles()).map(([path, entry]) => ({
@@ -951,6 +976,10 @@ async function crossCheck() {
           content: entry.content,
           executable: entry.executable,
         })),
+        ...(bundles === null || bundles === undefined ? [] : [{
+          path: CLOUD_PATHS.bundles,
+          content: JSON.stringify(bundles, null, 2) + '\n',
+        }]),
       ]
       const verified = await readVerifiedSnapshot(backend)
       const remotePatchText = verified.files.get(CLOUD_PATHS.patch) ?? null
@@ -1012,10 +1041,11 @@ async function crossCheck() {
       const bundles = input.bundles !== undefined
         ? input.bundles
         : await collectPluginNames()
-      if (bundles !== null && bundles !== undefined) {
+      const selectedBundles = selectableBundleNames(bundles)
+      if (selectedBundles !== null && selectedBundles !== undefined) {
         files.push({
           path: CLOUD_PATHS.bundles,
-          content: JSON.stringify(bundles, null, 2) + '\n',
+          content: JSON.stringify(selectedBundles, null, 2) + '\n',
         })
       }
 
