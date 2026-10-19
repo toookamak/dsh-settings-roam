@@ -110,10 +110,28 @@ export function buildInspectOverview(inspect, options = {}) {
     meta.push(`插件名单共 ${plugins.total} 项（其中 DSH 自带 ${plugins.official} 项）`)
   }
 
+  const details = [
+    { key: 'providers', items: inspect.providers?.names ?? [] },
+    ...(plugins === null ? [] : [
+      { key: 'thirdPartyPlugins', items: inspect.bundles.thirdParty ?? [] },
+      { key: 'officialPlugins', items: inspect.bundles.official ?? [] },
+    ]),
+    { key: 'sharedConfig', items: (inspect.shared ?? []).map(row => row?.id).filter(Boolean) },
+    { key: 'machineConfig', items: (inspect.machine ?? []).map(row => row?.id).filter(Boolean) },
+    { key: 'excludedConfig', items: inspect.excludedIds ?? [] },
+    { key: 'skills', items: inspect.skillNames ?? [] },
+  ].map(group => ({
+    ...group,
+    items: [...new Set(group.items.filter(name => typeof name === 'string' && name !== ''))].sort(),
+  }))
+
   return {
     title: '这台机器上可同步的内容',
     stats,
     meta,
+    // 清单默认折叠显示：概况卡保持紧凑，用户仍能在页面内核对具体名称。
+    // 插件按官方/第三方分组；技能按技能目录名计数，不展开文件级细目。
+    details,
     // 配置文件的绝对路径：用户想逐字核对自己配了什么时，去这里看。
     location: inspect.patchFile ?? null,
     total: shared,

@@ -96,7 +96,7 @@ window.__ModuleLoader__.load({
         title: '设置漫游',
         intro: '这里只管能跟着你走的配置（模型与接口地址）。本机地址、主题、工具权限、默认模型留在本机，不会跟着走。',
         config: {
-          title: '云端存储',
+          title: '同步设置',
           loading: '正在读取配置…',
           unavailable: '设置服务还没就绪，配置项暂时不可编辑。等页面重新加载后再试。',
           saving: '正在保存…',
@@ -249,7 +249,7 @@ window.__ModuleLoader__.load({
           availableUnknown: '有新版本：{to}（当前这一版认不出来）',
         },
         preview: {
-          title: '预览',
+          title: '本机当前设置',
           empty: '暂时读不到本机现状。本机有多个 profile 时，先去配置里指定一个；也可以点下面的「导出到文件」，先看看会带走什么。',
           pickTitle: '先选一个要同步的 profile',
           pickHint: '这台机器上有 {names}。选中的那个才会被同步，其余的保持原样。',
@@ -257,6 +257,16 @@ window.__ModuleLoader__.load({
         },
         actions: { title: '操作' },
         overview: { title: '这次同步了什么' },
+        overviewDetails: {
+          providers: '模型供应商（{count}）',
+          thirdPartyPlugins: '第三方插件（{count}）',
+          officialPlugins: 'DSH 内置插件（{count}）',
+          sharedConfig: '可同步配置项（{count}）',
+          machineConfig: '本机专属配置（{count}）',
+          excludedConfig: '不同步配置（{count}）',
+          skills: 'Skill（{count}）',
+          empty: '没有条目',
+        },
         skips: { title: '这些项留在了本机' },
         result: {
           done: '操作已完成。',
@@ -274,7 +284,7 @@ window.__ModuleLoader__.load({
         title: 'Settings Roam',
         intro: 'This section only carries settings that can travel (models and endpoints). Machine addresses, theme, tool permissions, and the default model stay here.',
         config: {
-          title: 'Cloud storage',
+          title: 'Sync settings',
           loading: 'Reading configuration…',
           unavailable: 'The settings service is not ready, so these fields cannot be edited yet. Reload the page and try again.',
           saving: 'Saving…',
@@ -402,7 +412,7 @@ window.__ModuleLoader__.load({
           availableUnknown: 'Newer version available: {to} (the installed one cannot be identified)',
         },
         preview: {
-          title: 'Preview',
+          title: 'Current machine settings',
           empty: 'Cannot read this machine yet. If it has several profiles, set one in the config first; you can also use \u201cExport to file\u201d below to see what would be taken.',
           pickTitle: 'Choose the profile to sync',
           pickHint: 'This machine has {names}. Only the selected one is synced; the rest stay as they are.',
@@ -410,6 +420,16 @@ window.__ModuleLoader__.load({
         },
         actions: { title: 'Actions' },
         overview: { title: 'What this sync covered' },
+        overviewDetails: {
+          providers: 'Model providers ({count})',
+          thirdPartyPlugins: 'Third-party plugins ({count})',
+          officialPlugins: 'Built-in DSH plugins ({count})',
+          sharedConfig: 'Syncable settings ({count})',
+          machineConfig: 'Machine-only settings ({count})',
+          excludedConfig: 'Excluded settings ({count})',
+          skills: 'Skills ({count})',
+          empty: 'No items',
+        },
         skips: { title: 'These stayed on this machine' },
         result: {
           done: 'Done.',
@@ -651,6 +671,11 @@ window.__ModuleLoader__.load({
       '.roam-changed{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;font-size:12px;line-height:18px}',
       '.roam-changed-path{color:var(--dsw-alias-label-secondary)}',
       '.roam-overview{display:flex;flex-direction:column;gap:12px}',
+      '.roam-detail-groups{display:flex;flex-direction:column;gap:6px}',
+      '.roam-detail{border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-2);padding:8px 10px}',
+      '.roam-detail summary{cursor:pointer;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+      '.roam-detail-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:4px 14px;max-height:220px;overflow:auto;margin:8px 0 0;padding:0 0 0 18px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
+      '.roam-detail-list li{overflow-wrap:anywhere}',
       '.roam-empty{margin:0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-tertiary)}',
       '.roam-block{display:flex;flex-direction:column;gap:12px}',
       '.roam-preview .roam-skips{margin-top:4px}',
@@ -1126,6 +1151,16 @@ window.__ModuleLoader__.load({
         o.meta?.length
           ? h('div', { className: 'roam-meta' }, o.meta.map(m => h('div', { key: m }, m)))
           : null,
+        Array.isArray(o.details) && o.details.length > 0
+          ? h('div', { className: 'roam-detail-groups' }, o.details.map(group => h(
+            'details',
+            { className: 'roam-detail', key: group.key },
+            h('summary', null, t(`overviewDetails.${group.key}`, { count: group.items.length })),
+            group.items.length > 0
+              ? h('ul', { className: 'roam-detail-list' }, group.items.map(item => h('li', { key: item }, item)))
+              : h('p', { className: 'roam-field-hint' }, t('overviewDetails.empty')),
+          )))
+          : null,
         // 落盘路径：用户据此去打开核对。
         o.location
           ? h(
@@ -1414,10 +1449,9 @@ window.__ModuleLoader__.load({
     /**
      * 设置分区本体（纯展示，测试直接调它做断言）。
      *
-     * 分块的顺序是「先看到什么、再做什么」：
-     * 状态一句话 → 预览（这次会带走什么）→ 操作（按钮与确认）→ 设置。
-     * 「云端仓库」那五个输入框排在最后，因为它们是设一次就不动的；
-     * 顶在前面会把每天要看的预览挤到需要滚动才能看到的位置。
+     * 页面顺序为：本机当前设置 → 操作与结果 → 同步设置。
+     * 本机概况与操作是高频信息；同步目标与范围通常只在初次安装后设置，
+     * 因此放在底部，避免每次查看状态都先经过一整张低频配置表单。
      * @param {object} props
      */
     function ComparisonBlock({ result, t = makeT('zh') }) {
@@ -1465,8 +1499,8 @@ window.__ModuleLoader__.load({
         h(PreviewBlock, { state, actions, t, form: state?.form }),
         h(ActionBlock, { state, actions, t }),
         h(ComparisonBlock, { result: state?.comparison, t }),
-        state?.form ? h(ConfigCard, { form: state.form, t, onSaved: actions?.onSaved, status: state?.status }) : null,
         h(EditCard, { entry: state?.editable, t, onEdit: actions?.onEdit }),
+        state?.form ? h(ConfigCard, { form: state.form, t, onSaved: actions?.onSaved, status: state?.status }) : null,
       )
     }
 
