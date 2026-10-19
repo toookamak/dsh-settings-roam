@@ -22,7 +22,7 @@ import { diffSnapshots, summarizeDiff } from './diff.js'
 import { applyPatchFile, verifyWriteBack } from './apply.js'
 import { scanSkills, listSkillNames, crossCheckSkills, applySkillFiles } from './skills.js'
 import { collectBundles } from './bundles.js'
-import { MACHINE_PATCH_IDS } from './ownership.js'
+import { isSharedPatchId, MACHINE_PATCH_IDS } from './ownership.js'
 import {
   checkPatchEntries,
   checkPlugins,
@@ -209,6 +209,46 @@ export function collectProviderNames(rows) {
 }
 
 /**
+ * 只取模型标识供本机清单展示，不读取或返回供应商配置值。
+ * 支持 providers.<name>.models 与根级 models 的常见数组/映射结构。
+ * @param {object[]} rows
+ * @returns {string[]}
+ */
+export function collectModelNames(rows) {
+  const names = new Set()
+  const addModels = (value, prefix = '') => {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const id = typeof item === 'string'
+          ? item
+          : [item?.id, item?.name, item?.model].find(part => typeof part === 'string')
+        if (id) names.add(prefix ? `${prefix}/${id}` : id)
+      }
+      return
+    }
+    if (value === null || typeof value !== 'object') return
+    for (const [key, item] of Object.entries(value)) {
+      const id = item !== null && typeof item === 'object'
+        ? [item.id, item.name, item.model].find(part => typeof part === 'string')
+        : null
+      const label = id ?? key
+      names.add(prefix ? `${prefix}/${label}` : label)
+    }
+  }
+
+  for (const row of rows ?? []) {
+    const config = row?.config
+    if (config === null || typeof config !== 'object') continue
+    addModels(config.models)
+    for (const [provider, definition] of Object.entries(config.providers ?? {})) {
+      if (definition?.models !== undefined) addModels(definition.models, provider)
+      else if (typeof definition?.model === 'string') names.add(`${provider}/${definition.model}`)
+    }
+  }
+  return [...names].sort()
+}
+
+/**
  * 建一个同步服务。
  *
  * backend 可以是实例，也可以是一个返回实例的函数（或 undefined）。
@@ -279,8 +319,27 @@ export function createSyncService(config) {
   function selectablePluginRows(rows) {
     const machineIds = new Set(MACHINE_PATCH_IDS)
     return (rows ?? []).filter(row => typeof row?.id === 'string'
+      && isSharedPatchId(row.id)
       && row.insert === undefined
-      && !machineIds.has(row.id))
+      && !machineIds.has(row.id)).map(row => ({
+      ...row,
+      ...(row.config && typeof row.config === 'object'
+        ? { config: stripSecretValues(row.config) }
+        : {}),
+    }))
+  }
+
+  /** 不把凭据值写入同步包；*Env 字段只含环境变量引用名，可保留。 */
+  function stripSecretValues(value) {
+    if (Array.isArray(value)) return value.map(stripSecretValues)
+    if (value === null || typeof value !== 'object') return value
+    return Object.fromEntries(Object.entries(value)
+      .filter(([key]) => {
+        const normalized = key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase()
+        const sensitive = /(^|[_-])(api[_-]?key|private[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|password|credential|authorization|auth|bearer|token|key)([_-]|$)/.test(normalized)
+        return !sensitive || /(?:^|[_-])(?:env|environment)$/.test(normalized)
+      })
+      .map(([key, item]) => [key, stripSecretValues(item)]))
   }
 
   /**
@@ -812,6 +871,7 @@ async function crossCheck() {
       // 装了几个插件。它们都不是「同步内容」本身，而是用户判断
       // 「这是不是我要备份的那份」时的凭据。
       const providerNames = collectProviderNames(shared)
+      const modelNames = collectModelNames(shared)
       // 技能按目录名去重：skills 是文件级记录，一个技能可能横跨好几个文件，
       // 直接数记录会把「一个技能」报成「五个」。
       const skillNames = [...new Set(
@@ -826,8 +886,11 @@ async function crossCheck() {
         patchExists,
         localConfigModifiedAt,
         total: rows.length,
-        shared,
-        machine,
+        // 该结果会通过设置页 API 发给浏览器；只返回已剔除凭据的可同步配置，
+        // 让用户能逐项核对供应商、模型及其它设置。同步动作仍从磁盘读取原始配置，
+        // 并在 selectablePluginRows 中剔除凭据字段。
+        shared: shared.map(row => ({ id: row.id, config: stripSecretValues(row.config ?? {}) })),
+        machine: machine.map(row => ({ id: row.id })),
         // 既不共享也不属于本机的项不计入同步，但要让用户看见它们被排除了，
         // 否则「我配的东西怎么没过去」会变成一个无从查证的问题。
         excludedIds: excluded.map(row => row.id).filter(Boolean),
@@ -835,6 +898,7 @@ async function crossCheck() {
         skills,
         skillCheck,
         providers: { count: providerNames.length, names: providerNames },
+        models: { count: modelNames.length, names: modelNames },
         skillNames,
         bundles,
       }

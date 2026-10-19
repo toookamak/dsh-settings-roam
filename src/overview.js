@@ -11,9 +11,8 @@
  *
  * 设计取向（依据用户要求「页面上要有概述显示」）
  * ─────────────────────────────────────────────
- * 只给概述，不铺开逐项清单。要看细节应去打开导出的文件——
- * 那里可以逐字核对，比在界面上滚动长列表有用。
- * 所以概述里每个数字都配「去哪看」的真实路径。
+ * 默认显示概述，细目按类别折叠并限制高度，数量多时可在各自清单内滚动。
+ * 配置值来自服务端剔除凭据后的副本，便于用户确认同步范围。
  */
 
 /**
@@ -34,7 +33,7 @@ export function buildPushOverview(plan, options = {}) {
   const stats = [
     { label: '公共配置', value: countByPrefix(files, 'config/profile.patch.yml') },
     { label: '技能', value: countByPrefix(files, 'skills/') },
-    // 与「本机现状」同一个口径：只数自己装的，DSH 自带的在 meta 里。
+    // 与「本机现状」同一个口径：只数第三方插件，DSH 自带项不进入用户清单。
     { label: '插件', value: plugins === null ? '—' : plugins.thirdParty },
   ]
 
@@ -42,10 +41,6 @@ export function buildPushOverview(plan, options = {}) {
   const at = options.now ?? new Date()
   meta.push(formatTime(at))
   if (plan.generatedBy) meta.push(`来自 ${plan.generatedBy}`)
-  if (plugins !== null && plugins.official > 0) {
-    meta.push(`插件名单共 ${plugins.total} 项（其中 DSH 自带 ${plugins.official} 项）`)
-  }
-
   const diffTotal = (summary.add ?? 0) + (summary.modify ?? 0) + (summary.delete ?? 0)
   if (diffTotal > 0) {
     meta.push(`与云端有 ${diffTotal} 项差异`)
@@ -90,9 +85,10 @@ export function buildInspectOverview(inspect, options = {}) {
 
   const stats = [
     { label: '模型供应商', value: inspect.providers?.count ?? 0 },
+    { label: '模型', value: inspect.models?.count ?? 0 },
     // 取不到插件名单时给一个明确的占位符，不能给 0：
     // 0 会被读成「这台机器一个插件都没装」，而事实是我们没问到。
-    // 数的是自己装的：DSH 自带的那批在 meta 里单独交代。
+    // 数的是第三方插件：DSH 自带项不进入用户清单。
     { label: '已装插件', value: plugins === null ? '—' : plugins.thirdParty },
     { label: '公共配置项', value: shared },
     { label: '技能', value: skillCount },
@@ -104,18 +100,14 @@ export function buildInspectOverview(inspect, options = {}) {
   if (excluded > 0) meta.push(`不同步 ${excluded} 项`)
   if (plugins === null) {
     meta.push('插件名单暂不可用（没问到插件管理服务）')
-  } else if (plugins.official > 0) {
-    // 名单里也有 DSH 自带的 bundle。它们不进主数字，但不能不说——
-    // 否则用户核对名单时会以为备份漏了东西。
-    meta.push(`插件名单共 ${plugins.total} 项（其中 DSH 自带 ${plugins.official} 项）`)
   }
 
   const details = [
     { key: 'providers', items: inspect.providers?.names ?? [] },
-    ...(plugins === null ? [] : [
-      { key: 'thirdPartyPlugins', items: inspect.bundles.thirdParty ?? [] },
-      { key: 'officialPlugins', items: inspect.bundles.official ?? [] },
-    ]),
+    { key: 'models', items: inspect.models?.names ?? [] },
+    { key: 'providerSettings', items: summarizeConfigSettings(inspect.shared ?? []) },
+    // DSH 自带插件不进入用户安装插件清单，只显示用户自己安装的第三方插件。
+    ...(plugins === null ? [] : [{ key: 'thirdPartyPlugins', items: inspect.bundles.thirdParty ?? [] }]),
     { key: 'sharedConfig', items: (inspect.shared ?? []).map(row => row?.id).filter(Boolean) },
     { key: 'machineConfig', items: (inspect.machine ?? []).map(row => row?.id).filter(Boolean) },
     { key: 'excludedConfig', items: inspect.excludedIds ?? [] },
@@ -138,14 +130,37 @@ export function buildInspectOverview(inspect, options = {}) {
   }
 }
 
+/** 展开只含非凭据值的可同步配置，供用户核对实际供应商与模型参数。 */
+function summarizeConfigSettings(rows) {
+  const items = []
+  const visit = (value, prefix) => {
+    if (Array.isArray(value)) {
+      if (value.every(item => item === null || ['string', 'number', 'boolean'].includes(typeof item))) {
+        items.push(`${prefix}: ${value.map(item => String(item)).join(', ')}`)
+      } else {
+        value.forEach((item, index) => visit(item, `${prefix}[${index}]`))
+      }
+      return
+    }
+    if (value !== null && typeof value === 'object') {
+      for (const [key, child] of Object.entries(value)) visit(child, prefix ? `${prefix}.${key}` : key)
+      return
+    }
+    if (value !== undefined) items.push(`${prefix}: ${String(value)}`)
+  }
+  for (const row of rows) {
+    if (row?.id && row?.config && typeof row.config === 'object') {
+      visit(row.config, row.id)
+    }
+  }
+  return items.sort()
+}
+
 /**
  * 插件名单的构成；名单取不到时返回 null（与「0 个插件」区分）。
  *
  * 为什么官方与第三方要分开数：界面上的「已装插件」是给用户核对的，
- * 他数的是自己装的那些。DSH 自带的 bundle 也在名单里——名单要如实记录
- * 这台机器装载了什么——但混进同一个数字会让他觉得「我没装这么多」：
- * 装 9 个插件的人看到的却是 19。所以主数字只数自己装的，
- * 自带的那批在 meta 里单独交代。
+ * 只列用户自己安装的项目；DSH 自带插件不会混入用户清单。
  *
  * @param {{official?: string[], thirdParty?: string[]}|null|undefined} bundles
  * @returns {{official: number, thirdParty: number, total: number}|null}

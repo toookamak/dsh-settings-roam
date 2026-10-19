@@ -259,13 +259,27 @@ window.__ModuleLoader__.load({
         overview: { title: '这次同步了什么' },
         overviewDetails: {
           providers: '模型供应商（{count}）',
+          models: '模型（{count}）',
+          providerSettings: '可同步配置详情（{count}）',
           thirdPartyPlugins: '第三方插件（{count}）',
-          officialPlugins: 'DSH 内置插件（{count}）',
           sharedConfig: '可同步配置项（{count}）',
           machineConfig: '本机专属配置（{count}）',
           excludedConfig: '不同步配置（{count}）',
           skills: 'Skill（{count}）',
           empty: '没有条目',
+        },
+        scope: {
+          title: '配置参与同步',
+          hint: '可分别选择上传和下载覆盖。当前仅列出已确认可跨机器同步的配置项；供应商与模型设置随 llm-pi-ai 同步，密钥值不会显示或同步。',
+          item: '配置项',
+          upload: '上传',
+          download: '下载覆盖',
+          llmConfig: '供应商与模型设置（llm-pi-ai）',
+          saving: '正在保存同步范围…',
+          saved: '同步范围已保存。',
+          failed: '同步范围保存失败，请重试。',
+          remoteUnavailable: '暂时无法读取云端配置候选项；本机配置仍可选择上传。',
+          noItems: '本机没有可选配置项。',
         },
         skips: { title: '这些项留在了本机' },
         result: {
@@ -422,13 +436,27 @@ window.__ModuleLoader__.load({
         overview: { title: 'What this sync covered' },
         overviewDetails: {
           providers: 'Model providers ({count})',
+          models: 'Models ({count})',
+          providerSettings: 'Syncable configuration details ({count})',
           thirdPartyPlugins: 'Third-party plugins ({count})',
-          officialPlugins: 'Built-in DSH plugins ({count})',
           sharedConfig: 'Syncable settings ({count})',
           machineConfig: 'Machine-only settings ({count})',
           excludedConfig: 'Excluded settings ({count})',
           skills: 'Skills ({count})',
           empty: 'No items',
+        },
+        scope: {
+          title: 'Choose what to sync',
+          hint: 'Choose upload and download overwrite separately. Only settings confirmed as portable are listed; provider and model settings sync with llm-pi-ai, without secret values.',
+          item: 'Configuration',
+          upload: 'Upload',
+          download: 'Overwrite from cloud',
+          llmConfig: 'Provider and model settings (llm-pi-ai)',
+          saving: 'Saving sync scope…',
+          saved: 'Sync scope saved.',
+          failed: 'Could not save the sync scope. Try again.',
+          remoteUnavailable: 'Cloud configuration choices are temporarily unavailable; local items can still be selected for upload.',
+          noItems: 'No selectable local configuration items.',
         },
         skips: { title: 'These stayed on this machine' },
         result: {
@@ -603,8 +631,6 @@ window.__ModuleLoader__.load({
       { key: 'webdavFolder', copy: 'webdavFolder' },
       { key: 'webdavUsername', copy: 'webdavUsername' },
       { key: 'webdavPassword', copy: 'webdavPassword', type: 'password' },
-      { key: 'uploadPluginIds', copy: 'uploadPluginIds', type: 'plugin-selection', defaultValue: '["llm-pi-ai"]' },
-      { key: 'downloadPluginIds', copy: 'downloadPluginIds', type: 'plugin-selection', defaultValue: '["llm-pi-ai"]' },
       { key: 'profileName', copy: 'profileName' },
       { key: 'exportRoot', copy: 'exportRoot' },
       { key: 'importRoot', copy: 'importRoot' },
@@ -676,6 +702,16 @@ window.__ModuleLoader__.load({
       '.roam-detail summary{cursor:pointer;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
       '.roam-detail-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:4px 14px;max-height:220px;overflow:auto;margin:8px 0 0;padding:0 0 0 18px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
       '.roam-detail-list li{overflow-wrap:anywhere}',
+      '.roam-scope{display:flex;flex-direction:column;gap:8px}',
+      '.roam-scope-list{display:flex;flex-direction:column;gap:6px;max-height:320px;overflow:auto}',
+      '.roam-scope-head,.roam-scope-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(64px,auto) minmax(92px,auto);align-items:center;gap:10px}',
+      '.roam-scope-head{font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}',
+      '.roam-scope-row{padding:8px 10px;border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-2)}',
+      '.roam-scope-name{min-width:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}',
+      '.roam-scope-check{display:flex;align-items:center;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary);cursor:pointer}',
+      '.roam-scope-check input{appearance:auto!important;-webkit-appearance:checkbox!important;width:16px;height:16px;margin:0;accent-color:var(--dsw-alias-action-primary);cursor:pointer;pointer-events:auto}',
+      '.roam-scope-check input:disabled{cursor:wait}',
+      '@media(max-width:520px){.roam-scope-head,.roam-scope-row{grid-template-columns:minmax(0,1fr) 58px 82px;gap:6px}.roam-scope-check{font-size:11px}}',
       '.roam-empty{margin:0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-tertiary)}',
       '.roam-block{display:flex;flex-direction:column;gap:12px}',
       '.roam-preview .roam-skips{margin-top:4px}',
@@ -987,26 +1023,8 @@ window.__ModuleLoader__.load({
       const snapshot = useFormSnapshot(form)
       const [drafts, setDrafts] = React.useState({})
       const [note, setNote] = React.useState(null)
-      const [pluginOptions, setPluginOptions] = React.useState({
-        uploadPluginIds: status?.syncablePatchIds ?? [],
-        downloadPluginIds: status?.syncablePatchIds ?? [],
-      })
 
       const values = snapshot?.value ?? {}
-
-      React.useEffect(() => {
-        let active = true
-        if (!status?.configured) return () => { active = false }
-        request('/api/settings-roam.selection')
-          .then(result => {
-            if (active) setPluginOptions({
-              uploadPluginIds: result.uploadPluginIds ?? status?.syncablePatchIds ?? [],
-              downloadPluginIds: result.downloadPluginIds ?? status?.syncablePatchIds ?? [],
-            })
-          })
-          .catch(() => {})
-        return () => { active = false }
-      }, [status?.configured, status?.syncablePatchIds?.join('|'), values.backendKind, values.repoUrl, values.branch, values.webdavUrl, values.webdavFolder])
 
       /** 草稿优先，其次才是已保存的值。 */
       const shown = key => (drafts[key] !== undefined ? drafts[key] : (values[key] ?? ''))
@@ -1075,7 +1093,6 @@ window.__ModuleLoader__.load({
           value: shown(field.key) || field.defaultValue || '',
           disabled: snapshot?.writable === false,
           t,
-          pluginIds: pluginOptions[field.key] ?? status?.syncablePatchIds ?? [],
           onChange: (key, value) => setDrafts(current => ({ ...current, [key]: value })),
           onCommit: commit,
         })),
@@ -1175,6 +1192,116 @@ window.__ModuleLoader__.load({
               )
               : null,
           )
+          : null,
+      )
+    }
+
+    /** 独立控制每个配置项是否上传、是否允许云端覆盖。 */
+    function SyncScope({ form, status, t = makeT('zh'), onSaved }) {
+      const snapshot = useFormSnapshot(form)
+      const values = snapshot?.value ?? {}
+      const localIds = status?.syncablePatchIds ?? []
+      const [options, setOptions] = React.useState({ uploadPluginIds: localIds, downloadPluginIds: localIds })
+      const [selectionDraft, setSelectionDraft] = React.useState(null)
+      const [busy, setBusy] = React.useState(false)
+      const [note, setNote] = React.useState(null)
+
+      React.useEffect(() => {
+        let active = true
+        setOptions({ uploadPluginIds: localIds, downloadPluginIds: localIds })
+        if (!status?.configured) return () => { active = false }
+        request('/api/settings-roam.selection')
+          .then(result => {
+            if (active) setOptions({
+              uploadPluginIds: Array.isArray(result.uploadPluginIds) ? result.uploadPluginIds : localIds,
+              downloadPluginIds: Array.isArray(result.downloadPluginIds) ? result.downloadPluginIds : localIds,
+            })
+          })
+          .catch(() => {
+            if (active) setNote({ tone: 'bad', text: t('scope.remoteUnavailable') })
+          })
+        return () => { active = false }
+      }, [status?.configured, localIds.join('|'), values.backendKind, values.repoUrl, values.branch, values.webdavUrl, values.webdavFolder, t('scope.remoteUnavailable')])
+
+      const readSelected = key => {
+        const fallback = '["llm-pi-ai"]'
+        try {
+          const parsed = JSON.parse(values[key] ?? fallback)
+          return new Set(Array.isArray(parsed) ? parsed.filter(id => typeof id === 'string') : [])
+        } catch { return new Set() }
+      }
+      const upload = selectionDraft?.uploadPluginIds ?? readSelected('uploadPluginIds')
+      const download = selectionDraft?.downloadPluginIds ?? readSelected('downloadPluginIds')
+      const ids = [...new Set([
+        ...options.uploadPluginIds,
+        ...options.downloadPluginIds,
+        ...localIds,
+      ])].sort()
+
+      const setSelected = async (field, id, checked) => {
+        if (busy) return
+        const selected = readSelected(field)
+        if (checked) selected.add(id)
+        else selected.delete(id)
+        const next = [...selected].sort()
+        setSelectionDraft(current => ({
+          uploadPluginIds: current?.uploadPluginIds ?? [...readSelected('uploadPluginIds')],
+          downloadPluginIds: current?.downloadPluginIds ?? [...readSelected('downloadPluginIds')],
+          [field]: next,
+        }))
+        setBusy(true)
+        setNote({ tone: 'saving', text: t('scope.saving') })
+        try {
+          const accepted = await form.set(field, JSON.stringify(next))
+          if (accepted === false) throw new Error('rejected')
+          setSelectionDraft(null)
+          setNote({ tone: 'ok', text: t('scope.saved') })
+          onSaved?.()
+        } catch {
+          setSelectionDraft(null)
+          setNote({ tone: 'bad', text: t('scope.failed') })
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      return h('div', { className: 'roam-scope' },
+        h('p', { className: 'roam-card-title' }, t('scope.title')),
+        h('p', { className: 'roam-field-hint' }, t('scope.hint')),
+        ids.length === 0
+          ? h('p', { className: 'roam-empty' }, t('scope.noItems'))
+          : h('div', { className: 'roam-scope-list' },
+            h('div', { className: 'roam-scope-head' },
+              h('span', null, t('scope.item')),
+              h('span', null, t('scope.upload')),
+              h('span', null, t('scope.download')),
+            ),
+            ids.map(id => h('div', { className: 'roam-scope-row', key: id },
+              h('span', { className: 'roam-scope-name' }, id === 'llm-pi-ai' ? t('scope.llmConfig') : id),
+              h('label', { className: 'roam-scope-check' },
+                h('input', {
+                  type: 'checkbox',
+                  checked: upload.has(id),
+                  disabled: busy || snapshot?.writable === false,
+                  onChange: event => { void setSelected('uploadPluginIds', id, event.target.checked) },
+                  'aria-label': `${t('scope.upload')} ${id}`,
+                }),
+                t('scope.upload'),
+              ),
+              h('label', { className: 'roam-scope-check' },
+                h('input', {
+                  type: 'checkbox',
+                  checked: download.has(id),
+                  disabled: busy || snapshot?.writable === false,
+                  onChange: event => { void setSelected('downloadPluginIds', id, event.target.checked) },
+                  'aria-label': `${t('scope.download')} ${id}`,
+                }),
+                t('scope.download'),
+              ),
+            )),
+          ),
+        note?.text
+          ? h('p', { className: 'roam-note', 'data-tone': note.tone === 'ok' ? 'ok' : note.tone === 'bad' ? 'bad' : undefined }, note.text)
           : null,
       )
     }
@@ -1362,6 +1489,7 @@ window.__ModuleLoader__.load({
         h('p', { className: 'roam-card-title' }, t('preview.title')),
         needsPick ? h(ProfilePicker, { profile, form, t, onSaved: actions?.onSaved }) : null,
         h(Overview, { state, actions, t }),
+        form ? h(SyncScope, { form, status: state?.status, t, onSaved: actions?.onSaved }) : null,
         // 还没有任何内容时也要有一条说明，否则这一块是一个没有落款的空壳。
         // 读取中不显示这句：刷新那一瞬间会闪一下「还没有内容」，
         // 紧接着又被概述替掉，看着像界面先否定自己一次。
