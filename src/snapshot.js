@@ -12,9 +12,31 @@ export const SCHEMA_VERSION = 1
  * 文本文件按 LF 计算摘要，避免 Git 在 Windows 检出时的 CRLF 转换造成误报。
  * Buffer 表示二进制文件，必须按原始字节计算，不能做换行归一化。
  */
-export function hashSnapshotContent(content) {
-  const normalized = typeof content === 'string' ? content.replace(/\r\n?/g, '\n') : content
+const TEXT_PATH = /\.(?:md|txt|json|ya?ml|js|mjs|cjs|ts|tsx|jsx|py|sh|ps1|toml|html|css|xml|csv|ini|conf)$/i
+
+function isUtf8TextBuffer(content) {
+  if (!Buffer.isBuffer(content)) return false
+  const text = content.toString('utf8')
+  return Buffer.from(text, 'utf8').equals(content)
+}
+
+export function hashSnapshotContent(content, path = '') {
+  // Git/WebDAV may normalize line endings when transporting text. Normalize only
+  // known textual snapshot paths; binary files continue to hash their raw bytes.
+  const textual = typeof content === 'string'
+    || (TEXT_PATH.test(path) && isUtf8TextBuffer(content))
+  const normalized = textual
+    ? (typeof content === 'string' ? content : content.toString('utf8')).replace(/\r\n?/g, '\n')
+    : content
   return createHash('sha256').update(normalized).digest('hex').slice(0, 16)
+}
+
+/** Accept pre-normalization manifests for text files during migration. */
+export function verifiesSnapshotContent(path, content, expectedHash) {
+  if (hashSnapshotContent(content, path) === expectedHash) return true
+  return TEXT_PATH.test(path)
+    && Buffer.isBuffer(content)
+    && hashSnapshotContent(content) === expectedHash
 }
 
 /**
@@ -30,7 +52,7 @@ export function buildSnapshot(input) {
     entries: input.files.map(f => ({
       path: f.path,
       kind: f.kind,
-      hash: hashSnapshotContent(f.content),
+      hash: hashSnapshotContent(f.content, f.path),
       ...(f.executable === true ? { executable: true } : {}),
     })),
   }

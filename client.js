@@ -152,12 +152,12 @@ window.__ModuleLoader__.load({
             hint: '留空自动判断；本机有多个 profile 时必须填，否则会明确报错而不是猜。',
           },
           exportRoot: {
-            label: '导出目录',
-            hint: '「导出到文件」把要备份的内容写到这里；留空用默认目录。',
+            label: '备份保存位置',
+            hint: '本地备份写入此目录；留空使用 DSH 默认备份目录。可直接粘贴路径。',
           },
           importRoot: {
-            label: '导入目录',
-            hint: '「导入」去这个目录里找之前导出的包；留空就用上面的导出目录。',
+            label: '恢复来源位置',
+            hint: '从此目录查找本地备份；留空时自动查找默认目录。可直接粘贴路径。',
           },
         },
         status: {
@@ -197,15 +197,16 @@ window.__ModuleLoader__.load({
           pullConfirm: '正在应用…',
         },
         action: {
-          export: '导出到文件',
-          import: '导入',
-          pull: '拉取',
-          push: '推送',
-          compare: '与云端对比',
+          export: '导出本机备份',
+          import: '从本机备份恢复',
+          pull: '下载并应用云端内容',
+          push: '上传所选内容',
+          compare: '查看云端差异',
+          chooseDirectory: '选择文件夹',
           confirm: '确认',
-          confirmPush: '确认推送',
-          confirmPull: '确认拉取',
-          confirmImport: '确认导入',
+          confirmPush: '确认上传所选内容',
+          confirmPull: '确认下载并应用',
+          confirmImport: '确认从本机备份恢复',
           confirmEdit: '确认改动',
           confirmUpdate: '确认更新',
           cancel: '取消',
@@ -255,12 +256,12 @@ window.__ModuleLoader__.load({
         },
         preview: {
           title: '本机当前设置',
-          empty: '暂时读不到本机现状。本机有多个 profile 时，先去配置里指定一个；也可以点下面的「导出到文件」，先看看会带走什么。',
+          empty: '暂时读不到本机现状。本机有多个 profile 时，先去配置里指定一个；也可以先导出本机备份查看内容。',
           pickTitle: '先选一个要同步的 profile',
           pickHint: '这台机器上有 {names}。选中的那个才会被同步，其余的保持原样。',
           pickSaved: '已选 {name}。',
         },
-        actions: { title: '操作' },
+        actions: { title: '操作', cloudTitle: '云端同步', localTitle: '本地备份与恢复', pickerUnavailable: '当前 DSH 未提供目录选择器，可直接粘贴路径。' },
         overview: { title: '这次同步了什么' },
         overviewDetails: {
           providers: '模型供应商（{count}）',
@@ -334,12 +335,12 @@ window.__ModuleLoader__.load({
             hint: 'Leave empty to detect automatically. Required when this machine has several profiles.',
           },
           exportRoot: {
-            label: 'Export directory',
-            hint: 'Export to file writes the backup here. Empty uses the default directory.',
+            label: 'Backup location',
+            hint: 'Local backups are written here. Empty uses the DSH default. You can paste a path.',
           },
           importRoot: {
-            label: 'Import directory',
-            hint: 'Import looks here for a previously exported package; empty uses the export directory above.',
+            label: 'Restore source',
+            hint: 'Look for backups here. Empty searches the DSH default. You can paste a path.',
           },
         },
         status: {
@@ -379,15 +380,16 @@ window.__ModuleLoader__.load({
           pullConfirm: 'Applying…',
         },
         action: {
-          export: 'Export to file',
-          import: 'Import',
-          pull: 'Pull',
-          push: 'Push',
-          compare: 'Compare with cloud',
+          export: 'Export local backup',
+          import: 'Restore from local backup',
+          pull: 'Download and apply cloud items',
+          push: 'Upload selected items',
+          compare: 'View cloud differences',
+          chooseDirectory: 'Choose folder',
           confirm: 'Confirm',
-          confirmPush: 'Confirm push',
-          confirmPull: 'Confirm pull',
-          confirmImport: 'Confirm import',
+          confirmPush: 'Confirm upload selected items',
+          confirmPull: 'Confirm download and apply',
+          confirmImport: 'Confirm restore from local backup',
           confirmEdit: 'Confirm change',
           confirmUpdate: 'Confirm update',
           cancel: 'Cancel',
@@ -442,7 +444,7 @@ window.__ModuleLoader__.load({
           pickHint: 'This machine has {names}. Only the selected one is synced; the rest stay as they are.',
           pickSaved: 'Selected {name}.',
         },
-        actions: { title: 'Actions' },
+        actions: { title: 'Actions', cloudTitle: 'Cloud sync', localTitle: 'Local backup and restore', pickerUnavailable: 'This DSH setup has no folder picker. You can paste a path.' },
         overview: { title: 'What this sync covered' },
         overviewDetails: {
           providers: 'Model providers ({count})',
@@ -489,6 +491,7 @@ window.__ModuleLoader__.load({
      */
     const ROUTES = {
       status: '/api/settings-roam.status',
+      chooseDirectory: '/api/settings-roam.choose-directory',
       export: '/api/settings-roam.export',
       import: '/api/settings-roam.import',
       push: '/api/settings-roam.push',
@@ -694,6 +697,13 @@ window.__ModuleLoader__.load({
       '.roam-checks{display:flex;flex-direction:column;gap:8px}',
       '.roam-check{display:flex;align-items:center;gap:8px;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary)}',
       '.roam-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+      '.roam-action-group-title{margin:4px 0 -4px;font-size:12px;line-height:18px;font-weight:500;color:var(--dsw-alias-label-secondary)}',
+      '.roam-backup-row{display:grid;grid-template-columns:minmax(110px,150px) minmax(0,1fr) auto;align-items:start;gap:10px;padding:10px;border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-2)}',
+      '.roam-backup-label{padding-top:8px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+      '.roam-backup-path{display:flex;flex-direction:column;gap:4px;min-width:0}',
+      '.roam-backup-input{display:flex;align-items:center;gap:8px;min-width:0}',
+      '.roam-backup-input .roam-field-input{flex:1;min-width:0}',
+      '.roam-backup-path .roam-field-hint,.roam-backup-path .roam-note{margin:0}',
       '.roam-pending-text{margin:0;font-size:13px;line-height:20px}',
       '.roam-transfer-list{display:flex;flex-direction:column;gap:6px;max-height:260px;overflow:auto;font-size:12px;line-height:18px}',
       '.roam-transfer-list ul{margin:0;padding-left:18px}',
@@ -737,6 +747,7 @@ window.__ModuleLoader__.load({
       '.roam-update{display:flex;align-items:center;gap:10px;margin-top:2px;padding-top:12px;border-top:0.5px solid var(--dsw-alias-border-l3)}',
       '.roam-update-note{margin:0;flex:1;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
       '.roam-update-line{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+      '@media(max-width:560px){.roam-backup-row{grid-template-columns:minmax(0,1fr)}.roam-backup-label{padding-top:0}}',
     ].join('')
 
     /**
@@ -873,8 +884,7 @@ window.__ModuleLoader__.load({
      *
      * 说明文字不是装饰。schemastery 不剥离未声明的键，字段名敲错了既不报错
      * 也不生效（实测）；把「这个字段管什么」写在旁边，是让用户自己就能发现
-     * 敲错的那道防线。importRoot 还要在标签上就写清尚未生效，
-     * 免得用户填完等不到结果。
+     * 敲错的那道防线。备份路径在操作区单独编辑，云端配置不与本地路径混排。
      */
     function Field({ field, value, disabled, t, onChange, onCommit, pluginIds = [] }) {
       const copy = `config.${field.copy}`
@@ -1048,6 +1058,7 @@ window.__ModuleLoader__.load({
       const shown = key => (drafts[key] !== undefined ? drafts[key] : (values[key] ?? ''))
       const backendKind = String(shown('backendKind') || 'git').trim().toLowerCase()
       const visibleFields = FIELDS.filter(field => {
+        if (['exportRoot', 'importRoot'].includes(field.key)) return false
         if (['repoUrl', 'branch'].includes(field.key)) return backendKind === 'git'
         if (['webdavUrl', 'webdavFolder', 'webdavUsername', 'webdavPassword'].includes(field.key)) return backendKind === 'webdav'
         return true
@@ -1587,7 +1598,64 @@ window.__ModuleLoader__.load({
      * 确认区跟着按钮走，而不是自成一张卡：确认的对象就是这些按钮点出来的，
      * 分开摆会让「我在确认哪一件事」变得需要靠记忆。
      */
-    function ActionBlock({ state, actions, t = makeT('zh') }) {
+    function BackupPath({ form, name, actions, status, t }) {
+      if (!form) return null
+      const snapshot = useFormSnapshot(form)
+      const savedValue = snapshot?.value?.[name] ?? ''
+      const [draft, setDraft] = React.useState(savedValue)
+      const [note, setNote] = React.useState(null)
+      React.useEffect(() => setDraft(savedValue), [savedValue])
+      const commit = async raw => {
+        const value = String(raw ?? '').trim()
+        if (value === savedValue) return
+        setNote('saving')
+        try {
+          const accepted = value === '' ? await form.unset(name) : await form.set(name, value)
+          if (accepted === false) throw new Error(t('config.failed'))
+          setNote('saved')
+          actions?.onSaved?.()
+        } catch (error) {
+          setNote(error?.message ?? t('config.failed'))
+        }
+      }
+      const choose = async () => {
+        try {
+          const picked = await actions?.onChooseDirectory?.()
+          if (typeof picked === 'string' && picked !== '') {
+            setDraft(picked)
+            await commit(picked)
+          }
+        } catch (error) {
+          setNote(error?.message ?? t('config.failed'))
+        }
+      }
+      const labelKey = name === 'exportRoot' ? 'config.exportRoot' : 'config.importRoot'
+      return h('div', { className: 'roam-backup-path' },
+        h('div', { className: 'roam-backup-input' },
+          h(Input, {
+            id: `roam-${name}`, className: 'roam-field-input', value: draft,
+            disabled: snapshot?.writable === false, spellCheck: false, autoComplete: 'off',
+            placeholder: status?.[name] ?? '',
+            onChange: event => setDraft(event.target.value),
+            onBlur: event => { void commit(event?.target?.value) },
+            onKeyDown: event => { if (event.key === 'Enter') event.currentTarget.blur() },
+          }),
+          h(Button, {
+            variant: 'outline', size: 'sm', disabled: snapshot?.writable === false || status?.canPickDirectory !== true,
+            onClick: choose,
+          }, t('action.chooseDirectory')),
+        ),
+        h('p', { className: 'roam-field-hint' }, t(`${labelKey}.hint`)),
+        status?.canPickDirectory !== true
+          ? h('p', { className: 'roam-field-hint' }, t('actions.pickerUnavailable'))
+          : null,
+        note === 'saving' ? h('p', { className: 'roam-note' }, t('config.saving'))
+          : note === 'saved' ? h('p', { className: 'roam-note', 'data-tone': 'ok' }, t('config.saved'))
+            : note ? h('p', { className: 'roam-note', 'data-tone': 'bad' }, String(note)) : null,
+      )
+    }
+
+    function ActionBlock({ state, actions, t = makeT('zh'), form }) {
       const loading = state?.kind === 'loading'
       const busy = state?.kind === 'busy'
       const disabled = loading || busy
@@ -1601,26 +1669,10 @@ window.__ModuleLoader__.load({
         'div',
         { className: 'roam-card roam-actions-card' },
         h('p', { className: 'roam-card-title' }, t('actions.title')),
+        h('p', { className: 'roam-action-group-title' }, t('actions.cloudTitle')),
         h(
           'div',
           { className: 'roam-actions' },
-          // 「导出」排在第一个：它是唯一不依赖云端仓库的动作，
-          // 也是用户第一次打开这一节时最该点的那个——先把要备份的东西取出来看看。
-          h(
-            Button,
-            { variant: 'primary', size: 'md', icon: IconExport, disabled, onClick: () => actions?.onExport?.() },
-            t('action.export'),
-          ),
-          h(
-            Button,
-            { variant: 'outline', size: 'md', icon: IconImport, disabled, onClick: () => actions?.onImport?.() },
-            t('action.import'),
-          ),
-          h(
-            Button,
-            { variant: 'outline', size: 'md', icon: IconPull, disabled: !cloudReady, onClick: () => actions?.onPull?.() },
-            t('action.pull'),
-          ),
           h(
             Button,
             { variant: 'outline', size: 'md', disabled: !cloudReady, onClick: () => actions?.onCompare?.() },
@@ -1631,6 +1683,22 @@ window.__ModuleLoader__.load({
             { variant: 'outline', size: 'md', icon: IconPush, disabled: !cloudReady, onClick: () => actions?.onPush?.() },
             t('action.push'),
           ),
+          h(
+            Button,
+            { variant: 'outline', size: 'md', icon: IconPull, disabled: !cloudReady, onClick: () => actions?.onPull?.() },
+            t('action.pull'),
+          ),
+        ),
+        h('p', { className: 'roam-action-group-title' }, t('actions.localTitle')),
+        h('div', { className: 'roam-backup-row' },
+          h('label', { className: 'roam-backup-label', htmlFor: 'roam-exportRoot' }, t('config.exportRoot.label')),
+          h(BackupPath, { form, name: 'exportRoot', actions, status: state?.status, t }),
+          h(Button, { variant: 'primary', size: 'md', icon: IconExport, disabled, onClick: () => actions?.onExport?.() }, t('action.export')),
+        ),
+        h('div', { className: 'roam-backup-row' },
+          h('label', { className: 'roam-backup-label', htmlFor: 'roam-importRoot' }, t('config.importRoot.label')),
+          h(BackupPath, { form, name: 'importRoot', actions, status: state?.status, t }),
+          h(Button, { variant: 'outline', size: 'md', icon: IconImport, disabled, onClick: () => actions?.onImport?.() }, t('action.import')),
         ),
         note === null
           ? null
@@ -1699,7 +1767,7 @@ window.__ModuleLoader__.load({
         ),
         h(StatusLine, { state, t }),
         h(PreviewBlock, { state, actions, t, form: state?.form }),
-        h(ActionBlock, { state, actions, t }),
+        h(ActionBlock, { state, actions, t, form: state?.form }),
         h(ComparisonBlock, { result: state?.comparison, t }),
         h(EditCard, { entry: state?.editable, t, onEdit: actions?.onEdit }),
         state?.form ? h(ConfigCard, { form: state.form, t, onSaved: actions?.onSaved, status: state?.status }) : null,
@@ -2068,6 +2136,10 @@ window.__ModuleLoader__.load({
           } catch {
             // 复制失败没有可行动的地方——路径本身就在界面上，用户可以自己选中。
           }
+        },
+        onChooseDirectory: async () => {
+          const result = await request(ROUTES.chooseDirectory, {})
+          return result.path
         },
       }
 

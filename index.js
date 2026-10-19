@@ -161,6 +161,12 @@ export function apply(ctx, config) {
     pluginManagerRef = scope.pluginManager
   })
 
+  // 目录选择是增强能力：没有宿主 picker 时仍可粘贴路径使用本地备份。
+  let directoryPickerRef
+  ctx.inject(['directoryPicker'], (scope) => {
+    directoryPickerRef = scope.directoryPicker
+  })
+
   // 后端惰性构造：仓库地址只能由用户填，YAML 里传不进对象实例。
   // 传工厂而不是实例，装配阶段就不会因子配置而崩掉（真装载验收的教训）。
   const service = createSyncService({
@@ -280,6 +286,14 @@ export function apply(ctx, config) {
       buildPullOverview,
       buildImportOverview,
       buildInspectOverview,
+      pickDirectory: async (signal) => {
+        const capability = directoryPickerRef?.capability?.()
+        if (capability?.kind !== 'native') {
+          throw new Error('当前 DSH 未提供本机目录选择器；请直接粘贴目录路径。')
+        }
+        return capability.pick(signal)
+      },
+      canPickDirectory: () => directoryPickerRef?.capability?.()?.kind === 'native',
     })) {
       scope.effect(
         () => scope.connection.fetch.register(route),

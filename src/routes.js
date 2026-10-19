@@ -44,6 +44,7 @@ export const ROUTES = {
   edit: `${ROUTE_PREFIX}.edit`,
   update: `${ROUTE_PREFIX}.update`,
   compare: `${ROUTE_PREFIX}.compare`,
+  chooseDirectory: `${ROUTE_PREFIX}.choose-directory`,
 }
 
 /**
@@ -115,6 +116,8 @@ export function createRouteHandlers(deps) {
     // 「本机现在有什么」的概述构建器。缺省为 null：它是 status 的附加信息，
     // 没传也不该让整条只读路径崩掉（单测里就常常只关心字段本身）。
     buildInspectOverview = null,
+    pickDirectory = null,
+    canPickDirectory = () => false,
     now = () => new Date(),
   } = deps
 
@@ -181,6 +184,7 @@ export function createRouteHandlers(deps) {
       // 缺了它界面会把一次成功当成失败（request() 会抛「请求失败」）。
       ok: true,
       configured: service.isConfigured(),
+      canPickDirectory: (() => { try { return Boolean(canPickDirectory()) } catch { return false } })(),
       dshRoot: service.dshRoot,
       exportRoot: service.defaultExportRoot(),
       importRoot: service.defaultImportRoot(),
@@ -220,6 +224,14 @@ export function createRouteHandlers(deps) {
     ok: true,
     ...(await service.pluginSelectionOptions()),
   })
+
+  const chooseDirectory = async (request) => {
+    if (typeof pickDirectory !== 'function') {
+      return jsonResponse({ ok: false, error: '当前 DSH 未提供本机目录选择器；请直接粘贴目录路径。' }, 503)
+    }
+    const path = await pickDirectory(request.signal)
+    return jsonResponse({ ok: true, path })
+  }
 
   /**
    * 本地导出：把「要备份的东西」真实落成文件，不碰云端。
@@ -508,6 +520,10 @@ export function createRouteHandlers(deps) {
         if (request.method !== 'GET') return jsonResponse({ ok: false, error: '插件选择列表需要 GET' }, 405)
         return jsonResponse(await selection())
       }
+      if (path === ROUTES.chooseDirectory) {
+        if (request.method !== 'POST') return jsonResponse({ ok: false, error: '选择目录需要 POST' }, 405)
+        return await chooseDirectory(request)
+      }
       if (path === ROUTES.compare) {
         if (request.method !== 'POST') return jsonResponse({ ok: false, error: '云端对比需要 POST' }, 405)
         const result = await service.compareWithRemote()
@@ -558,6 +574,7 @@ export function describeRoutes(deps) {
   return [
     { path: ROUTES.status, methods: ['GET'], requestBody: 'buffered', fetch: handlers.fetch },
     { path: ROUTES.selection, methods: ['GET'], requestBody: 'buffered', fetch: handlers.fetch },
+    { path: ROUTES.chooseDirectory, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
     { path: ROUTES.export, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
     { path: ROUTES.import, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },
     { path: ROUTES.push, methods: ['POST'], requestBody: 'buffered', fetch: handlers.fetch },

@@ -17,7 +17,7 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { parsePatchList, renderPatches, splitByTopLevelId } from './yaml-loader.js'
 import { profilePatchPath, profileDir, listProfiles } from './home-paths.js'
-import { buildSnapshot, serializeSnapshot, parseSnapshot, hashSnapshotContent } from './snapshot.js'
+import { buildSnapshot, serializeSnapshot, parseSnapshot, verifiesSnapshotContent } from './snapshot.js'
 import { diffSnapshots, summarizeDiff } from './diff.js'
 import { applyPatchFile, verifyWriteBack } from './apply.js'
 import { scanSkills, listSkillNames, crossCheckSkills, applySkillFiles } from './skills.js'
@@ -110,7 +110,7 @@ async function readVerifiedSnapshot(backend) {
     seen.add(entry.path)
     const content = await backend.readFile(entry.path)
     if (content === null) throw new Error(`云端文件缺失，已停止同步：${entry.path}`)
-    if (typeof entry.hash !== 'string' || hashSnapshotContent(content) !== entry.hash) {
+    if (typeof entry.hash !== 'string' || !verifiesSnapshotContent(entry.path, content, entry.hash)) {
       throw new Error(`云端文件校验不一致，已停止同步：${entry.path}。请检查云端副本后再试。`)
     }
     files.set(entry.path, content)
